@@ -1,4 +1,4 @@
-name: Build Shopee Affiliate Agent EXE
+name: Build Tool Affiliate EXE
 
 on:
   workflow_dispatch:
@@ -26,7 +26,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ShopeeAffiliateAgent-Windows-x64
+          name: Tool-Affiliate-Windows-x64
           path: artifacts/publish/
           if-no-files-found: error
           retention-days: 14
