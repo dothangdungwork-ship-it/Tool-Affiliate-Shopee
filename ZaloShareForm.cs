@@ -194,10 +194,15 @@ internal sealed class ZaloShareForm : Form
         sendButton.Enabled = false;
         try
         {
-            var payload = JsonSerializer.Serialize(messageBox.Text);
+            var normalizedText = messageBox.Text.Replace("\r\n", "\n").Replace("\r", "\n").Trim();
+            var payload = JsonSerializer.Serialize(normalizedText);
             var script = BuildSendScript(payload);
+
+            zaloBrowser.Focus();
+            await Task.Delay(150);
+
             var result = await ExecuteInMainAndFramesAsync(script);
-            if (result is null)
+            if (string.IsNullOrWhiteSpace(result) || result == "null")
             {
                 statusLabel.Text = "Không tìm thấy khung soạn tin. Hãy đăng nhập và mở một nhóm Zalo trước.";
                 MessageBox.Show(this, statusLabel.Text, "Không gửi được", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -221,7 +226,7 @@ internal sealed class ZaloShareForm : Form
         finally
         {
             sending = false;
-            sendButton.Enabled = true;
+            if (!IsDisposed) sendButton.Enabled = true;
         }
     }
 
@@ -230,10 +235,13 @@ internal sealed class ZaloShareForm : Form
         var core = zaloBrowser.CoreWebView2;
         if (core is null) return null;
 
+        string? lastErrorResult = null;
+
         try
         {
             var result = await core.ExecuteScriptAsync(script);
             if (IsSuccessResult(result)) return result;
+            if (!string.IsNullOrWhiteSpace(result) && result != "null") lastErrorResult = result;
         }
         catch { }
 
@@ -243,16 +251,18 @@ internal sealed class ZaloShareForm : Form
             {
                 var result = await frame.ExecuteScriptAsync(script);
                 if (IsSuccessResult(result)) return result;
+                if (!string.IsNullOrWhiteSpace(result) && result != "null") lastErrorResult = result;
             }
             catch { }
         }
-        return null;
+        return lastErrorResult;
     }
 
     private static bool IsSuccessResult(string raw)
     {
         try
         {
+            if (string.IsNullOrWhiteSpace(raw) || raw == "null") return false;
             using var doc = JsonDocument.Parse(raw);
             return doc.RootElement.TryGetProperty("ok", out var value) && value.GetBoolean();
         }
@@ -260,63 +270,154 @@ internal sealed class ZaloShareForm : Form
     }
 
     private static string BuildSendScript(string messageJson) => """
-    (() => {
-      const msg = __MESSAGE__;
-      const visible = e => {
-        const r = e.getBoundingClientRect();
-        const s = getComputedStyle(e);
-        return r.width > 20 && r.height > 10 && s.display !== 'none' &&
-          s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled;
-      };
-      const all = [...document.querySelectorAll(
-        '[contenteditable], [role="textbox"], textarea, input, [data-placeholder], [aria-label]'
-      )];
-      const active = document.activeElement;
-      const isEditor = e => {
-        if (!e || !visible(e)) return false;
-        const tag = e.tagName?.toLowerCase();
-        const attrs = [
-          e.getAttribute('contenteditable'), e.getAttribute('role'),
-          e.getAttribute('data-placeholder'), e.getAttribute('aria-label'),
-          e.getAttribute('placeholder'), e.className?.toString()
-        ].join(' ').toLowerCase();
-        return e.isContentEditable || e.getAttribute('contenteditable') === 'true' ||
-          tag === 'textarea' || (tag === 'input' && !/checkbox|radio|button|hidden/.test(e.type)) ||
-          /textbox|tin nhắn|message|chat.?input|composer|editor/.test(attrs);
-      };
-      let candidates = all.filter(isEditor);
-      if (isEditor(active) && !candidates.includes(active)) candidates.unshift(active);
-      candidates = [...new Set(candidates)].sort((a,b) => {
-        const ar=a.getBoundingClientRect(), br=b.getBoundingClientRect();
-        const score = r => r.bottom * 2 + r.width + (r.height > 20 ? 100 : 0);
-        return score(br)-score(ar);
-      });
-      const editor = candidates[0];
-      if (!editor)
-        return {ok:false, message:'Chưa nhận diện được ô nhập tin nhắn. Hãy bấm chuột vào dòng “Nhập @, tin nhắn tới...” trong nhóm rồi thử lại.'};
+    (async () => {
+      try {
+        const msg = __MESSAGE__;
+        const visible = e => {
+          if (!e) return false;
+          const r = e.getBoundingClientRect();
+          const s = getComputedStyle(e);
+          return r.width > 20 && r.height > 10 && s.display !== 'none' &&
+            s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled;
+        };
 
-      editor.focus();
-      if (editor.isContentEditable || editor.getAttribute('contenteditable') === 'true') {
-        const selection = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(editor);
-        range.deleteContents();
-        const lines = msg.split('\n');
-        lines.forEach((line, i) => {
-          if (i) editor.appendChild(document.createElement('br'));
-          if (line) editor.appendChild(document.createTextNode(line));
+        const zaloSelectors = [
+          '#richInput',
+          '[id^="input_line_"]',
+          '.rich-input',
+          '[data-translate-placeholder*="Nhập @"]',
+          '[data-translate-placeholder*="tin nhắn"]',
+          '[contenteditable="true"]',
+          '[role="textbox"]',
+          'textarea'
+        ];
+
+        let candidates = [];
+        for (const sel of zaloSelectors) {
+          for (const el of document.querySelectorAll(sel)) {
+            if (visible(el) && !candidates.includes(el)) {
+              const idAndClass = ((el.id || '') + ' ' + (el.className || '') + ' ' + (el.getAttribute('placeholder') || '')).toLowerCase();
+              if (/contact-search|search-input|tìm kiếm/.test(idAndClass)) continue;
+              candidates.push(el);
+            }
+          }
+        }
+
+        candidates.sort((a, b) => {
+          const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+          const aId = (a.id || '').includes('richInput') || (a.id || '').includes('input_line') ? 1000 : 0;
+          const bId = (b.id || '').includes('richInput') || (b.id || '').includes('input_line') ? 1000 : 0;
+          return (bId + br.bottom * 2 + br.width) - (aId + ar.bottom * 2 + ar.width);
         });
-      } else {
-        const proto = editor.tagName === 'TEXTAREA'
-          ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-        if (setter) setter.call(editor, msg); else editor.value = msg;
+
+        let editor = candidates[0];
+        if (!editor) {
+          return {
+            ok: false,
+            message: 'Chưa nhận diện được ô nhập tin nhắn. Hãy mở một cuộc trò chuyện trên Zalo Web rồi thử lại.'
+          };
+        }
+
+        if (editor.closest('[contenteditable="true"]')) {
+          editor = editor.closest('[contenteditable="true"]');
+        }
+
+        editor.click();
+        editor.focus();
+
+        if (editor.isContentEditable || editor.getAttribute('contenteditable') === 'true') {
+          const selection = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          document.execCommand('delete', false, null);
+
+          let inserted = false;
+          try {
+            inserted = document.execCommand('insertText', false, msg);
+          } catch {}
+
+          if (!inserted || !(editor.innerText || '').trim()) {
+            try {
+              const dt = new DataTransfer();
+              dt.setData('text/plain', msg);
+              const pasteEvent = new ClipboardEvent('paste', {
+                bubbles: true,
+                cancelable: true,
+                clipboardData: dt
+              });
+              editor.dispatchEvent(pasteEvent);
+            } catch {}
+          }
+
+          if (!(editor.innerText || '').trim()) {
+            editor.textContent = msg;
+            editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: msg }));
+          } else {
+            editor.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        } else {
+          const proto = editor.tagName === 'TEXTAREA'
+            ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(editor, msg); else editor.value = msg;
+          editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: msg }));
+          editor.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        await new Promise(r => setTimeout(r, 250));
+
+        const sendSelectors = [
+          '[data-translate-title="STR_SEND"]',
+          '[title="Gửi tin nhắn"]',
+          '[title="Send message"]',
+          '.send-msg-btn',
+          '.fa-Sent-msg_24_Line'
+        ];
+
+        let sendBtn = null;
+        for (const sel of sendSelectors) {
+          const found = document.querySelector(sel);
+          if (found && visible(found)) {
+            sendBtn = found.closest('div[role="button"], button, .z--btn--v2') || found;
+            break;
+          }
+        }
+
+        if (!sendBtn) {
+          const allButtons = [...document.querySelectorAll('button, [role="button"], .z--btn--v2')].filter(visible);
+          sendBtn = allButtons.find(b => {
+            const meta = ((b.innerText || '') + ' ' + (b.title || '') + ' ' + (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-translate-title') || '')).toLowerCase();
+            return /str_send|gửi tin nhắn|send message|^gửi$|^send$/i.test(meta.trim());
+          });
+        }
+
+        if (sendBtn) {
+          sendBtn.click();
+          return { ok: true, message: 'Đã tự động điền và gửi tin nhắn vào nhóm Zalo thành công!' };
+        }
+
+        const enterDown = new KeyboardEvent('keydown', {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+          bubbles: true, cancelable: true
+        });
+        const enterPress = new KeyboardEvent('keypress', {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+          bubbles: true, cancelable: true
+        });
+        const enterUp = new KeyboardEvent('keyup', {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+          bubbles: true, cancelable: true
+        });
+        editor.dispatchEvent(enterDown);
+        editor.dispatchEvent(enterPress);
+        editor.dispatchEvent(enterUp);
+
+        return { ok: true, message: 'Đã điền nội dung và kích hoạt lệnh gửi (Enter) trên Zalo.' };
+      } catch (err) {
+        return { ok: false, message: 'Lỗi thực thi trên Zalo Web: ' + (err && err.message ? err.message : String(err)) };
       }
-      editor.dispatchEvent(new InputEvent('input', {
-        bubbles:true, inputType:'insertText', data:msg
-      }));
-      editor.dispatchEvent(new Event('change', {bubbles:true}));
-      return {ok:true, message:'Đã điền nội dung vào ô chat. Hãy kiểm tra nhóm và bấm gửi trong Zalo.'};
     })();
     """.Replace("__MESSAGE__", messageJson);
 }
