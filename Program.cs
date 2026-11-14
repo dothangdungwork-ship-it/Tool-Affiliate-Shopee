@@ -669,9 +669,18 @@ public sealed class MainForm : Form
             showUnavailableOnly = false;
             RefreshTable();
             SaveData();
-            Navigate(CustomLinkUrl);
-            int buyable = items.Count(p => p.AvailabilityStatus == "Có thể mua");
-            MessageBox.Show($"Đã kiểm tra {checkedCount}/{targets.Count} sản phẩm.\\nĐã loại khỏi danh sách {removedItems.Count} sản phẩm bị ẩn/xóa, hết hàng hoặc ngừng bán.\\nCòn lại {items.Count} sản phẩm; trong đó {buyable} sản phẩm xác nhận mua được và {unknown} sản phẩm chưa xác định (không đưa vào danh sách link mua được).\\nDanh sách đã được lưu.");
+            int buyable = items.Count(p => p.AvailabilityStatus == "Có thể mua" && string.IsNullOrWhiteSpace(p.AffiliateUrl));
+            int alreadyLinked = items.Count(p => p.AvailabilityStatus == "Có thể mua" && !string.IsNullOrWhiteSpace(p.AffiliateUrl));
+            MessageBox.Show($"Đã kiểm tra {checkedCount}/{targets.Count} sản phẩm.\\nĐã loại khỏi danh sách {removedItems.Count} sản phẩm bị ẩn/xóa, hết hàng hoặc ngừng bán.\\nCòn lại {items.Count} sản phẩm; {buyable} sản phẩm mua được đang chờ tạo link, {alreadyLinked} sản phẩm đã có link và {unknown} sản phẩm chưa xác định.\\nAgent sẽ tự chuyển sang Custom Link và tạo link cho các sản phẩm mua được.");
+            if (buyable > 0)
+            {
+                autoAgentAfterNavigation = true;
+                Navigate(CustomLinkUrl);
+            }
+            else
+            {
+                Navigate(CustomLinkUrl);
+            }
         }
         catch (Exception ex)
         {
