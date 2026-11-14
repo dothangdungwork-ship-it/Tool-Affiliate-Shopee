@@ -236,8 +236,8 @@ public sealed class MainForm : Form
           const isProduct = u => {
             try {
               const x = new URL(u, location.href);
-              return /(^|\\.)shopee\\.vn$/i.test(x.hostname) &&
-                (/\\/product\\/\\d+\\/\\d+/i.test(x.pathname) || /-i\\.\\d+\\.\\d+/i.test(x.pathname));
+              return /(^|\.)shopee\.vn$/i.test(x.hostname) &&
+                (/\/product\/\d+\/\d+/i.test(x.pathname) || /-i\.\d+\.\d+/i.test(x.pathname));
             } catch { return false; }
           };
           for (const a of document.querySelectorAll('a[href]')) {
@@ -246,7 +246,7 @@ public sealed class MainForm : Form
             try { href = new URL(a.href, location.href).href.split('?')[0]; } catch { continue; }
             if (!isProduct(href) || seen.has(href)) continue;
             const card = a.closest('[data-sqe="item"], [data-testid*="item"], li') || a.parentElement?.parentElement || a.parentElement;
-            const name = ((card?.innerText || a.innerText || a.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim()).slice(0, 240);
+            const name = ((card?.innerText || a.innerText || a.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim()).slice(0, 240);
             seen.add(href);
             found.push({ name: name || 'Sản phẩm Shopee', productUrl: href });
             if (found.length >= __LIMIT__) break;
