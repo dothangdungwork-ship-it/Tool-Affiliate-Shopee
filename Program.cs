@@ -219,7 +219,7 @@ public sealed partial class MainForm : Form
         AddButton(panel, "Lấy sản phẩm đang hiển thị", 418, 75, 172, ExtractVisibleProducts);
 
         AddButton(panel, "Đăng nhập Shopee bằng tài khoản", 12, 114, 280, ShowLoginDialog);
-        AddButton(panel, "Đăng nhập Zalo bằng QR", 302, 114, 288, OpenZaloLogin);
+        AddButton(panel, "Gửi tin nhắn vào Zalo", 302, 114, 288, OpenZaloLogin);
         AddButton(panel, "Mở Custom Link", 12, 158, 280, () => Navigate(CustomLinkUrl));
         AddButton(panel, "AI Agent: tự tạo link Affiliate", 302, 158, 288, () => RunAffiliateAgent());
 
