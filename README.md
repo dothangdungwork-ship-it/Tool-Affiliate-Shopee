@@ -1,4 +1,4 @@
-# Shopee Affiliate Agent V3
+# Tool Affiliate
 
 Windows desktop helper for managing a Shopee Affiliate product-link queue without API access.
 
