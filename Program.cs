@@ -406,29 +406,59 @@ public sealed class MainForm : Form
                   const before = new Set([...document.querySelectorAll('a[href],input,textarea')].map(e => e.href || e.value || ''));
                   matches[0].click();
 
-                  const isCandidate = value => {
+                  const normalizeUrl = value => {
+                    let s = (value || '').trim().replace(/[\\s<>"')\\],.]+$/g, '');
+                    if (!s) return '';
+                    if (s.startsWith('//')) s = 'https:' + s;
+                    if (!/^https?:\\/\\//i.test(s) && /^(s\\.shope\\.vn|shope\\.ee)\\//i.test(s)) s = 'https://' + s;
+                    return s;
+                  };
+                  const isShortAffiliate = value => {
                     try {
-                      const u = new URL(value, location.href);
+                      const u = new URL(normalizeUrl(value));
                       return u.protocol === 'https:' &&
-                        (u.hostname === 'shope.ee' || u.hostname.endsWith('.shopee.vn')) &&
-                        value !== productUrl && !value.includes('/search?');
+                        (u.hostname === 'shope.ee' || u.hostname === 's.shopee.vn');
                     } catch { return false; }
+                  };
+                  const readResultModal = () => {
+                    const visible = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
+                    const nodes = [...document.querySelectorAll('[role=dialog], [aria-modal=true], .ant-modal, .modal, body *')]
+                      .filter(visible);
+                    const modal = nodes.find(e => {
+                      const t = (e.innerText || '').toLowerCase();
+                      return t.includes('link of custom link') && t.length < 12000;
+                    });
+                    const root = modal || document.body;
+                    const raw = [
+                      ...[...root.querySelectorAll('input,textarea')].map(e => e.value || e.getAttribute('value') || e.innerText || e.textContent || ''),
+                      ...[...root.querySelectorAll('a[href]')].map(e => e.href || ''),
+                      root.innerText || root.textContent || ''
+                    ].join('\\n');
+                    const matches = raw.match(/https?:\\/\\/[^\\s"'<>]+/gi) || [];
+                    return [...new Set(matches.map(normalizeUrl).filter(isShortAffiliate))];
                   };
 
                   for (let i=0; i<36; i++) {
                     await new Promise(resolve => setTimeout(resolve, 500));
+                    const modalLinks = readResultModal();
+                    if (modalLinks.length === 1) {
+                      const close = [...document.querySelectorAll('button,[role=button]')]
+                        .find(e => {
+                          const r = e.getBoundingClientRect();
+                          const t = (e.getAttribute('aria-label') || e.title || e.innerText || '').toLowerCase();
+                          return r.width > 0 && r.height > 0 &&
+                            (t === 'close' || t === '关闭' || t === 'đóng' || e.closest('[role=dialog],[aria-modal=true],.ant-modal')?.innerText?.toLowerCase().includes('link of custom link'));
+                        });
+                      return { ok:true, affiliateUrl:modalLinks[0], message:'Đã đọc link từ cửa sổ Link of Custom Link' };
+                    }
                     const candidates = [
-                      ...[...document.querySelectorAll('input,textarea')].map(e => e.value),
-                      ...[...document.querySelectorAll('a[href]')].map(e => e.href)
-                    ].filter(v => v && isCandidate(v) && !before.has(v));
+                      ...[...document.querySelectorAll('input,textarea')].map(e => e.value || e.getAttribute('value') || ''),
+                      ...[...document.querySelectorAll('a[href]')].map(e => e.href || '')
+                    ].map(normalizeUrl).filter(v => v && isShortAffiliate(v) && !before.has(v));
                     const unique = [...new Set(candidates)];
                     if (unique.length === 1) return { ok:true, affiliateUrl:unique[0], message:'Đã lấy được link Affiliate' };
-                    if (unique.length > 1) {
-                      const short = unique.filter(v => /shope\.ee/i.test(v));
-                      if (short.length === 1) return { ok:true, affiliateUrl:short[0], message:'Đã lấy link rút gọn Affiliate' };
-                    }
                   }
-                  return { ok:false, message:'Đã bấm tạo link nhưng chưa đọc được link kết quả. Agent dừng; hãy kiểm tra trang Custom Link.' };
+                  return { ok:false, message:'Shopee đã mở kết quả nhưng Agent chưa đọc được link trong cửa sổ Link of Custom Link. Hãy giữ nguyên cửa sổ kết quả để kiểm tra.' };
                 })(__PRODUCT_URL_JSON__);
                 """;
                 script = script.Replace("__PRODUCT_URL_JSON__", input);
