@@ -1069,11 +1069,11 @@ public sealed class MainForm : Form
                     await Task.Delay(1100);
                     const string script = """
                     (() => {
-                      const clean = s => (s || '').replace(/\\s+/g,' ').trim();
+                      const clean = s => (s || '').replace(/\s+/g,' ').trim();
                       const visible = e => { const r=e.getBoundingClientRect(); return r.width>0 && r.height>0; };
                       const body = clean(document.body?.innerText || '');
                       const shopLink = [...document.querySelectorAll('a[href]')].find(a =>
-                        /\\/shop\\/|\\/seller\\//i.test(a.getAttribute('href') || '') && clean(a.innerText));
+                        /\/shop\/|\/seller\//i.test(a.getAttribute('href') || '') && clean(a.innerText));
                       let shop = clean(shopLink?.innerText || '');
                       if (!shop) {
                         const shopNode = [...document.querySelectorAll('[class]')].find(e =>
@@ -1086,13 +1086,13 @@ public sealed class MainForm : Form
                       const priceNodes = [...document.querySelectorAll('[class],[data-testid],[aria-label]')].filter(visible);
                       const priceText = priceNodes.map(e => clean(e.innerText || e.getAttribute('aria-label')))
                         .filter(t => t && t.length < 70 && /(?:₫|đ|VND)/i.test(t));
-                      const price = metas[0] || priceText.find(t => /^\\s*(?:₫|đ)?\\s*[\\d.,]+\\s*(?:₫|đ|VND)?\\s*$/i.test(t)) || '';
-                      const voucherLines = body.split(/(?<=[.!])\\s+|\\n/).filter(t =>
+                      const price = metas[0] || priceText.find(t => /^\s*(?:₫|đ)?\s*[\d.,]+\s*(?:₫|đ|VND)?\s*$/i.test(t)) || '';
+                      const voucherLines = body.split(/(?<=[.!])\s+|\n/).filter(t =>
                         /voucher|mã giảm|giảm giá|ưu đãi|coupon/i.test(t)).slice(0,35);
                       const exactAfter = lines => {
                         const line = lines.find(t => /giá sau|sau khi áp|price after|after voucher|còn lại|chỉ còn/i.test(t));
                         if (!line) return '';
-                        const m = line.match(/(?:₫|đ)?\\s*([\\d.,]{4,})\\s*(?:₫|đ|VND)?/i);
+                        const m = line.match(/(?:₫|đ)?\s*([\d.,]{4,})\s*(?:₫|đ|VND)?/i);
                         return m ? m[1] : '';
                       };
                       const publicLines = voucherLines.filter(t => !/dành riêng|của bạn|chỉ bạn|your account|for you|personal/i.test(t));
