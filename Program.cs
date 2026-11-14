@@ -537,34 +537,36 @@ public sealed class MainForm : Form
                 var input = JsonSerializer.Serialize(product.ProductUrl);
                 const string submitScript = """
                 (() => {
-                  const visible = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
-                  const norm = s => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-                  const fields = [...document.querySelectorAll('textarea,input:not([type=hidden])')]
-                    .filter(visible).filter(e => !e.disabled && !e.readOnly);
+                  const visible = e => {
+                    if (!e || e.disabled || e.readOnly) return false;
+                    const r = e.getBoundingClientRect();
+                    const s = getComputedStyle(e);
+                    return r.width > 120 && r.height > 35 && s.display !== 'none' &&
+                      s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
+                  };
+                  const norm = s => (s || '').toLowerCase().replace(/\\s+/g, ' ').trim();
+                  const fields = [...document.querySelectorAll('textarea,input:not([type=hidden])')].filter(visible);
                   const scored = fields.map(e => {
-                    const meta = norm([e.placeholder, e.getAttribute('aria-label'), e.name, e.id,
+                    const placeholder = norm(e.getAttribute('placeholder'));
+                    const meta = norm([placeholder, e.getAttribute('aria-label'), e.name, e.id,
                       e.parentElement?.innerText, e.labels ? [...e.labels].map(x => x.innerText).join(' ') : ''].join(' '));
                     let score = 0;
-                    // Shopee Custom Link currently labels its main URL box with this English placeholder.
-                    if (e.tagName === 'TEXTAREA' && /(convert multiple links|input up to 5 links|shopee\\.vn)/i.test(meta)) score = 100;
-                    else if (e.tagName === 'TEXTAREA') score = 20;
-                    else if (/(product|商品|sản phẩm|url|link|đường dẫn)/i.test(meta)) score = 10;
-                    return { e, score };
-                  }).sort((a,b) => b.score-a.score);
+                    if (e.tagName === 'TEXTAREA' && /(chuyển đổi nhiều liên kết|điền tối đa 5 liên kết|convert multiple links|input up to 5 links)/i.test(meta)) score = 200;
+                    else if (e.tagName === 'TEXTAREA' && /(shopee\\.vn|http|liên kết|link)/i.test(meta)) score = 150;
+                    else if (e.tagName === 'TEXTAREA') score = 100;
+                    else if (/(product url|đường dẫn sản phẩm|url sản phẩm)/i.test(meta)) score = 80;
+                    return { e, score, area: e.getBoundingClientRect().width * e.getBoundingClientRect().height };
+                  }).sort((a,b) => b.score-a.score || b.area-a.area);
                   const field = scored[0]?.e;
-                  if (!field || (scored[0].score === 0 && fields.length !== 1))
-                    return { ok:false, message:'Không tìm thấy ô nhập URL Custom Link. Hãy kiểm tra trang Shopee đã tải đầy đủ.' };
-                  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), 'value')?.set;
+                  if (!field || scored[0].score < 80)
+                    return { ok:false, message:'Không tìm thấy ô nhập URL sản phẩm. Hãy kiểm tra Custom Link đã tải đầy đủ và thử tải lại trang.' };
+                  field.focus();
+                  const proto = field.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
                   if (setter) setter.call(field, __PRODUCT_URL_JSON__); else field.value = __PRODUCT_URL_JSON__;
-                  field.dispatchEvent(new Event('input', { bubbles:true }));
+                  field.dispatchEvent(new InputEvent('input', { bubbles:true, inputType:'insertText', data:__PRODUCT_URL_JSON__ }));
                   field.dispatchEvent(new Event('change', { bubbles:true }));
-                  const buttons = [...document.querySelectorAll('button,[role=button],input[type=submit]')]
-                    .filter(visible).filter(e => !e.disabled);
-                  const matches = buttons.filter(e => /(get link|generate|create link|create|tạo link|lấy link|tạo liên kết|lấy liên kết)/i.test(norm(e.innerText || e.value || e.getAttribute('aria-label'))));
-                  if (matches.length !== 1)
-                    return { ok:false, message:'Không tìm thấy duy nhất một nút tạo link phù hợp. Agent dừng để tránh bấm nhầm.' };
-                  matches[0].click();
-                  return { ok:true, message:'Đã gửi yêu cầu tạo link; đang chờ kết quả Shopee.' };
+                  return { ok:true, message:'Đã điền URL vào ô Custom Link. Hãy kiểm tra nút chuyển đổi liên kết.' };
                 })();
                 """;
                 var safeProductUrl = JsonSerializer.Serialize(product.ProductUrl);
