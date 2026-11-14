@@ -195,10 +195,14 @@ internal sealed class ZaloShareForm : Form
         try
         {
             var normalizedText = messageBox.Text.Replace("\r\n", "\n").Replace("\r", "\n").Trim();
+            
+            // Lưu sẵn vào Clipboard hệ thống để lệnh Paste hoạt động nguyên khối 100%
+            try { Clipboard.SetText(normalizedText); } catch { }
+
             var payload = JsonSerializer.Serialize(normalizedText);
 
             zaloBrowser.Focus();
-            await Task.Delay(120);
+            await Task.Delay(150);
 
             var fillScript = BuildFillScript(payload);
             var result = await ExecuteInMainAndFramesAsync(fillScript);
@@ -217,7 +221,8 @@ internal sealed class ZaloShareForm : Form
 
             if (ok)
             {
-                await Task.Delay(280);
+                // Đợi 450ms để Zalo nhận diện đầy đủ toàn bộ các dòng và tạo link preview trước khi bấm Gửi
+                await Task.Delay(450);
                 var triggerResult = await ExecuteInMainAndFramesAsync(BuildTriggerSendScript());
                 if (!string.IsNullOrWhiteSpace(triggerResult) && triggerResult != "null")
                 {
@@ -347,6 +352,7 @@ internal sealed class ZaloShareForm : Form
         editor.focus();
 
         if (editor.isContentEditable || editor.getAttribute('contenteditable') === 'true') {
+          // Xóa nội dung cũ đang có trong ô chat
           const selection = window.getSelection();
           const range = document.createRange();
           range.selectNodeContents(editor);
@@ -354,30 +360,47 @@ internal sealed class ZaloShareForm : Form
           selection.addRange(range);
           document.execCommand('delete', false, null);
 
-          let inserted = false;
+          // ƯU TIÊN SỐ 1: Giả lập sự kiện Paste nguyên khối để KHÔNG bị Zalo hiểu nhầm dấu \n là phím Enter gửi sớm!
+          let pasted = false;
           try {
-            inserted = document.execCommand('insertText', false, msg);
+            const dt = new DataTransfer();
+            dt.setData('text/plain', msg);
+            const pasteEvent = new ClipboardEvent('paste', {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: dt
+            });
+            editor.dispatchEvent(pasteEvent);
+            pasted = (editor.innerText || '').includes('http');
           } catch {}
 
-          if (!inserted || !(editor.innerText || '').trim()) {
+          // ƯU TIÊN SỐ 2: Gọi lệnh paste trực tiếp từ Clipboard hệ thống (đã được C# gán sẵn)
+          if (!pasted) {
             try {
-              const dt = new DataTransfer();
-              dt.setData('text/plain', msg);
-              const pasteEvent = new ClipboardEvent('paste', {
-                bubbles: true,
-                cancelable: true,
-                clipboardData: dt
-              });
-              editor.dispatchEvent(pasteEvent);
+              document.execCommand('paste');
+              pasted = (editor.innerText || '').includes('http');
             } catch {}
           }
 
-          if (!(editor.innerText || '').trim()) {
-            editor.textContent = msg;
-            editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: msg }));
-          } else {
-            editor.dispatchEvent(new Event('input', { bubbles: true }));
+          // ƯU TIÊN SỐ 3: Nếu Paste không tự ăn, điền từng dòng bằng insertText kết hợp Shift+Enter để xuống dòng an toàn
+          if (!pasted) {
+            const lines = msg.split('\n');
+            for (let i = 0; i < lines.length; i++) {
+              if (i > 0) {
+                const shiftEnter = new KeyboardEvent('keydown', {
+                  key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+                  shiftKey: true, bubbles: true, cancelable: true
+                });
+                editor.dispatchEvent(shiftEnter);
+                document.execCommand('insertLineBreak', false, null);
+              }
+              if (lines[i]) {
+                document.execCommand('insertText', false, lines[i]);
+              }
+            }
           }
+
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
         } else {
           const proto = editor.tagName === 'TEXTAREA'
             ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -387,7 +410,7 @@ internal sealed class ZaloShareForm : Form
           editor.dispatchEvent(new Event('change', { bubbles: true }));
         }
 
-        return { ok: true, message: 'Đã tự động điền và gửi tin nhắn vào nhóm Zalo thành công!' };
+        return { ok: true, message: 'Đã tự động điền đầy đủ link và gửi vào nhóm Zalo thành công!' };
       } catch (err) {
         return { ok: false, message: 'Lỗi điền nội dung trên Zalo Web: ' + (err && err.message ? err.message : String(err)) };
       }
@@ -434,7 +457,7 @@ internal sealed class ZaloShareForm : Form
 
         if (sendBtn) {
           sendBtn.click();
-          return { ok: true, message: 'Đã tự động điền và gửi tin nhắn vào nhóm Zalo thành công!' };
+          return { ok: true, message: 'Đã tự động điền đầy đủ link và gửi vào nhóm Zalo thành công!' };
         }
 
         if (editor) {
@@ -456,7 +479,7 @@ internal sealed class ZaloShareForm : Form
           editor.dispatchEvent(enterUp);
         }
 
-        return { ok: true, message: 'Đã tự động điền và gửi tin nhắn vào nhóm Zalo thành công!' };
+        return { ok: true, message: 'Đã tự động điền đầy đủ link và gửi vào nhóm Zalo thành công!' };
       } catch (err) {
         return { ok: false, message: 'Đã điền tin nhắn nhưng lỗi kích hoạt nút Gửi: ' + (err && err.message ? err.message : String(err)) };
       }
