@@ -1083,61 +1083,46 @@ public sealed class MainForm : Form
                     const string script = """
                     (() => {
                       const clean = s => (s || '').replace(/\\s+/g,' ').trim();
-                      const visible = e => {
-                        const r=e.getBoundingClientRect(), s=getComputedStyle(e);
-                        return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden';
-                      };
                       const valid = s => {
                         s=clean(s);
                         return s.length>=2 && s.length<=100 &&
                           !/^(shop|cửa hàng|xem shop|xem cửa hàng|chat ngay|đánh giá|sản phẩm)$/i.test(s);
                       };
                       let shop = '';
-                      // 1. Dữ liệu cấu trúc (nếu trang cung cấp JSON-LD).
-                      const readSeller = obj => {
-                        if (!obj || typeof obj !== 'object') return '';
-                        if (obj.seller) {
-                          const v = typeof obj.seller === 'string' ? obj.seller :
-                            (obj.seller.name || obj.seller.alternateName || '');
-                          if (valid(v)) return clean(v);
-                        }
-                        for (const value of Object.values(obj)) {
-                          if (Array.isArray(value)) {
-                            for (const x of value) { const found=readSeller(x); if(found) return found; }
-                          } else if (value && typeof value === 'object') {
-                            const found=readSeller(value); if(found) return found;
+                      // Shopee product page renders seller block as: "SHOP NAME ... Xem Shop".
+                      // Find the exact "Xem Shop" control, then read the shop-name text immediately before it.
+                      const shopControls = [...document.querySelectorAll('a,button,span,div')].filter(e =>
+                        clean(e.innerText || e.textContent).toLowerCase() === 'xem shop');
+                      for (const control of shopControls) {
+                        let node = control;
+                        for (let level=0; level<5 && node && !shop; level++, node=node.parentElement) {
+                          const text = clean(node.innerText || node.textContent);
+                          const pos = text.toLowerCase().lastIndexOf('xem shop');
+                          if (pos < 1) continue;
+                          let before = clean(text.slice(0,pos));
+                          before = before.replace(/\\s+\\d+\\s*(giây|phút|giờ|ngày|seconds?|minutes?|hours?|days?).*$/i,'');
+                          const parts = before.split(/\\n+/).map(clean).filter(Boolean);
+                          const candidate = parts[parts.length-1] || before;
+                          if (valid(candidate) && !/^(shop|cửa hàng|người bán)$/i.test(candidate)) {
+                            shop = candidate;
+                            break;
                           }
                         }
-                        return '';
-                      };
-                      for (const node of document.querySelectorAll('script[type="application/ld+json"]')) {
-                        try { shop = readSeller(JSON.parse(node.textContent || '')); if(shop) break; } catch {}
                       }
-                      // 2. Link cửa hàng trong vùng thông tin người bán.
+                      // Fallback: parse the rendered seller line from page text.
                       if (!shop) {
-                        const links = [...document.querySelectorAll('a[href]')].filter(a =>
-                          visible(a) && valid(a.innerText) &&
-                          /\\/(?:shop|seller)\\//i.test(a.getAttribute('href') || ''));
-                        shop = clean(links.sort((a,b) => clean(b.innerText).length-clean(a.innerText).length)[0]?.innerText || '');
+                        const body = document.body?.innerText || '';
+                        const match = body.match(/([^\\n]{2,100}?)\\s+(?:\\d+\\s*)?(?:giây|phút|giờ|ngày)\\s+trước\\s+Xem Shop/i);
+                        if (match && valid(match[1])) shop = clean(match[1]);
                       }
-                      // 3. Các nhãn/thuộc tính phổ biến của khu vực shop.
+                      // Fallback: Shopee shop links; exclude generic navigation links.
                       if (!shop) {
-                        const nodes = [...document.querySelectorAll('[data-testid],[aria-label],[title],[class]')].filter(visible);
-                        const candidates = nodes.map(e => ({
-                          text: clean(e.innerText),
-                          meta: clean([e.getAttribute('data-testid'),e.getAttribute('aria-label'),e.getAttribute('title'),e.className].join(' '))
-                        })).filter(x => valid(x.text) &&
-                          /(shop.?name|seller.?name|shop.?info|shop.?header|seller.?info|shop.?name)/i.test(x.meta));
-                        shop = candidates.sort((a,b)=>a.text.length-b.text.length)[0]?.text || '';
-                      }
-                      // 4. Nội dung trang có nhãn Shop/Seller gần tên cửa hàng.
-                      if (!shop) {
-                        const lines = (document.body?.innerText || '').split(/\\n+/).map(clean).filter(Boolean);
-                        for (let i=0;i<lines.length;i++) {
-                          if (/^(shop|seller|cửa hàng|người bán)$/i.test(lines[i]) && valid(lines[i+1])) {
-                            shop=lines[i+1]; break;
-                          }
-                        }
+                        const links = [...document.querySelectorAll('a[href]')].filter(a => {
+                          const href=a.getAttribute('href') || '';
+                          const text=clean(a.innerText || a.textContent);
+                          return valid(text) && /\\/(?:shop|seller)\\//i.test(href);
+                        });
+                        shop = clean(links.sort((a,b)=>clean(b.innerText).length-clean(a.innerText).length)[0]?.innerText || '');
                       }
                       return { shopName: valid(shop) ? clean(shop) : '' };
                     })();
