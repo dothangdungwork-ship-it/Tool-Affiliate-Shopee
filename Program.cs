@@ -27,6 +27,11 @@ public sealed class AgentLinkResult
 {
     public bool Ok { get; set; }
     public string AffiliateUrl { get; set; } = "";
+    public string ShopName { get; set; } = "";
+    public string ListedPrice { get; set; } = "";
+    public string PublicVoucherPrice { get; set; } = "";
+    public string AccountVoucherPrice { get; set; } = "";
+    public string VoucherInfo { get; set; } = "";
     public string Message { get; set; } = "";
 }
 
@@ -217,7 +222,8 @@ public sealed class MainForm : Form
         AddButton(panel, "AI Agent: tự tạo link Affiliate", 12, 158, 578, () => RunAffiliateAgent());
 
         panel.Controls.Add(LabelAt("2. Danh sách sản phẩm (tối đa 100)", 200));
-        AddButton(panel, "Kiểm tra sản phẩm không thể mua", 12, 224, 578, CheckAvailabilityForAll);
+        AddButton(panel, "Kiểm tra sản phẩm không thể mua", 12, 224, 284, CheckAvailabilityForAll);
+        AddButton(panel, "Đọc tên shop & giá voucher", 300, 224, 290, ReadShopAndVoucherInfo);
         table.SetBounds(12, 262, panel.ClientSize.Width - 24, 563);
         table.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         table.ReadOnly = true;
@@ -229,6 +235,10 @@ public sealed class MainForm : Form
         table.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.Number), HeaderText = "STT", FillWeight = 35 });
         table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.Name), HeaderText = "Sản phẩm", FillWeight = 90 });
+        table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.ShopName), HeaderText = "Tên shop", FillWeight = 80 });
+        table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.ListedPrice), HeaderText = "Giá hiển thị", FillWeight = 65 });
+        table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.PublicVoucherPrice), HeaderText = "Sau voucher công khai", FillWeight = 75 });
+        table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.AccountVoucherPrice), HeaderText = "Sau voucher riêng", FillWeight = 75 });
         table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.ProductUrl), HeaderText = "Link gốc", FillWeight = 125 });
         table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.AffiliateUrl), HeaderText = "Link Affiliate", FillWeight = 125 });
         table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.Status), HeaderText = "Trạng thái", FillWeight = 65 });
@@ -1037,6 +1047,96 @@ public sealed class MainForm : Form
         }
     }
 
+    private async void ReadShopAndVoucherInfo()
+    {
+        if (browser.CoreWebView2 is null || items.Count == 0)
+        {
+            MessageBox.Show("Chưa có sản phẩm hoặc trình duyệt chưa sẵn sàng.");
+            return;
+        }
+
+        var targets = items.ToList();
+        int read = 0, failed = 0;
+        try
+        {
+            for (int i = 0; i < targets.Count; i++)
+            {
+                var item = targets[i];
+                status.Text = $"Đang đọc shop và voucher {i + 1}/{targets.Count}: {item.Name}";
+                try
+                {
+                    await NavigateAndWaitAsync(item.ProductUrl, 30000);
+                    await Task.Delay(1100);
+                    const string script = """
+                    (() => {
+                      const clean = s => (s || '').replace(/\\s+/g,' ').trim();
+                      const visible = e => { const r=e.getBoundingClientRect(); return r.width>0 && r.height>0; };
+                      const body = clean(document.body?.innerText || '');
+                      const shopLink = [...document.querySelectorAll('a[href]')].find(a =>
+                        /\\/shop\\/|\\/seller\\//i.test(a.getAttribute('href') || '') && clean(a.innerText));
+                      let shop = clean(shopLink?.innerText || '');
+                      if (!shop) {
+                        const shopNode = [...document.querySelectorAll('[class]')].find(e =>
+                          visible(e) && clean(e.innerText).length > 2 && clean(e.innerText).length < 90 &&
+                          /shop|cửa hàng|người bán/i.test(e.getAttribute('aria-label') || ''));
+                        shop = clean(shopNode?.innerText || '');
+                      }
+                      const metas = [...document.querySelectorAll('meta[property="product:price:amount"],meta[itemprop="price"]')]
+                        .map(e => e.content || e.getAttribute('content')).filter(Boolean);
+                      const priceNodes = [...document.querySelectorAll('[class],[data-testid],[aria-label]')].filter(visible);
+                      const priceText = priceNodes.map(e => clean(e.innerText || e.getAttribute('aria-label')))
+                        .filter(t => t && t.length < 70 && /(?:₫|đ|VND)/i.test(t));
+                      const price = metas[0] || priceText.find(t => /^\\s*(?:₫|đ)?\\s*[\\d.,]+\\s*(?:₫|đ|VND)?\\s*$/i.test(t)) || '';
+                      const voucherLines = body.split(/(?<=[.!])\\s+|\\n/).filter(t =>
+                        /voucher|mã giảm|giảm giá|ưu đãi|coupon/i.test(t)).slice(0,35);
+                      const exactAfter = lines => {
+                        const line = lines.find(t => /giá sau|sau khi áp|price after|after voucher|còn lại|chỉ còn/i.test(t));
+                        if (!line) return '';
+                        const m = line.match(/(?:₫|đ)?\\s*([\\d.,]{4,})\\s*(?:₫|đ|VND)?/i);
+                        return m ? m[1] : '';
+                      };
+                      const publicLines = voucherLines.filter(t => !/dành riêng|của bạn|chỉ bạn|your account|for you|personal/i.test(t));
+                      const accountLines = voucherLines.filter(t => /dành riêng|của bạn|chỉ bạn|your account|for you|personal|voucher của tôi/i.test(t));
+                      const publicPrice = exactAfter(publicLines);
+                      const accountPrice = exactAfter(accountLines);
+                      return {
+                        shopName: shop,
+                        listedPrice: clean(price),
+                        publicVoucherPrice: publicPrice,
+                        accountVoucherPrice: accountPrice,
+                        voucherInfo: voucherLines.join(' | ').slice(0,1800)
+                      };
+                    })();
+                    """;
+                    var raw = await browser.CoreWebView2.ExecuteScriptAsync(script);
+                    using var doc = JsonDocument.Parse(raw);
+                    var root = doc.RootElement;
+                    item.ShopName = GetJsonString(root, "shopName");
+                    item.ListedPrice = GetJsonString(root, "listedPrice");
+                    item.PublicVoucherPrice = GetJsonString(root, "publicVoucherPrice");
+                    item.AccountVoucherPrice = GetJsonString(root, "accountVoucherPrice");
+                    item.VoucherInfo = GetJsonString(root, "voucherInfo");
+                    if (string.IsNullOrWhiteSpace(item.ShopName) && string.IsNullOrWhiteSpace(item.ListedPrice)) failed++;
+                    else read++;
+                }
+                catch { failed++; }
+                RefreshTable();
+                SaveData();
+            }
+            status.Text = $"Đã đọc thông tin {read}/{targets.Count} sản phẩm; {failed} sản phẩm không lấy đủ dữ liệu.";
+            MessageBox.Show($"Đã đọc được thông tin {read}/{targets.Count} sản phẩm.\nGiá sau voucher chỉ được điền khi Shopee hiển thị rõ giá cuối cùng; nếu không có giá cụ thể, phần mềm để trống và lưu nội dung voucher để tránh tính sai.\nVoucher riêng phụ thuộc tài khoản đang đăng nhập.");
+        }
+        catch (Exception ex)
+        {
+            status.Text = "Lỗi đọc thông tin shop/voucher: " + ex.Message;
+            MessageBox.Show(status.Text);
+        }
+    }
+
+    private static string GetJsonString(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? "" : "";
+
     private async Task<string> CheckProductAvailabilityAsync(string productUrl)
     {
         await NavigateAndWaitAsync(productUrl, 25000);
@@ -1093,7 +1193,7 @@ public sealed class MainForm : Form
         using var dialog = new SaveFileDialog { Filter = "CSV UTF-8 (*.csv)|*.csv", FileName = "Shopee_San_Pham_Khong_The_Mua.csv" };
         if (dialog.ShowDialog() != DialogResult.OK) return;
         var csv = new StringBuilder();
-        csv.AppendLine("STT,Ten san pham,Product URL,Affiliate URL,Trang thai");
+        csv.AppendLine("STT,Ten san pham,Ten shop,Gia hien thi,Gia sau voucher cong khai,Gia sau voucher rieng,Thong tin voucher,Product URL,Affiliate URL,Trang thai");
         foreach (var p in matches)
             csv.AppendLine(string.Join(",", new[] { CsvSafe(p.Number.ToString()), CsvSafe(p.Name),
                 CsvSafe(p.ProductUrl), CsvSafe(p.AffiliateUrl), CsvSafe(p.AvailabilityStatus) }));
@@ -1133,8 +1233,10 @@ public sealed class MainForm : Form
         csv.AppendLine("STT,Ten san pham,Product URL,Affiliate URL,Trang thai");
         foreach (var p in exportItems)
             csv.AppendLine(string.Join(",", new[] {
-                CsvSafe(p.Number.ToString()), CsvSafe(p.Name), CsvSafe(p.ProductUrl),
-                CsvSafe(p.AffiliateUrl), CsvSafe(p.AvailabilityStatus == "Chưa kiểm tra" ? p.Status : p.AvailabilityStatus)
+                CsvSafe(p.Number.ToString()), CsvSafe(p.Name), CsvSafe(p.ShopName), CsvSafe(p.ListedPrice),
+                CsvSafe(p.PublicVoucherPrice), CsvSafe(p.AccountVoucherPrice), CsvSafe(p.VoucherInfo),
+                CsvSafe(p.ProductUrl), CsvSafe(p.AffiliateUrl),
+                CsvSafe(p.AvailabilityStatus == "Chưa kiểm tra" ? p.Status : p.AvailabilityStatus)
             }));
         File.WriteAllText(dialog.FileName, csv.ToString(), new UTF8Encoding(true));
         MessageBox.Show($"Đã xuất {exportItems.Count} sản phẩm" +
