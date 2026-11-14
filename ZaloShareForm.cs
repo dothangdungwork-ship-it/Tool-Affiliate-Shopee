@@ -217,7 +217,6 @@ internal sealed class ZaloShareForm : Form
 
             if (ok)
             {
-                // Đợi Zalo cập nhật trạng thái nút Gửi sau khi điền văn bản
                 await Task.Delay(280);
                 var triggerResult = await ExecuteInMainAndFramesAsync(BuildTriggerSendScript());
                 if (!string.IsNullOrWhiteSpace(triggerResult) && triggerResult != "null")
@@ -290,8 +289,6 @@ internal sealed class ZaloShareForm : Form
         catch { return false; }
     }
 
-    // LƯU Ý QUAN TRỌNG: Hàm JS phải ĐỒNG BỘ (không dùng async), vì WebView2.ExecuteScriptAsync
-    // sẽ trả về "{}" nếu hàm trả về Promise thay vì trả về trực tiếp đối tượng kết quả!
     private static string BuildFillScript(string messageJson) => """
     (() => {
       try {
