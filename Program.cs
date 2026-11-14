@@ -234,7 +234,8 @@ public sealed class MainForm : Form
             int half = (contentWidth - 10) / 2;
             filterButton.SetBounds(12, actionY + 35, half, 32);
             exportUnavailableButton.SetBounds(22 + half, actionY + 35, half, 32);
-            deleteSelectedButton.SetBounds(12, actionY + 70, contentWidth, 32);\n            note.Top = actionY + 107;
+            deleteSelectedButton.SetBounds(12, actionY + 70, contentWidth, 32);
+            note.Top = actionY + 107;
             note.Width = contentWidth;
         };
     }
