@@ -1082,49 +1082,39 @@ public sealed class MainForm : Form
                     await Task.Delay(1100);
                     const string script = """
                     (() => {
-                      const clean = s => (s || '').replace(/\\s+/g,' ').trim();
+                      const clean = s => (s || '').replace(/\s+/g,' ').trim();
                       const valid = s => {
                         s=clean(s);
                         return s.length>=2 && s.length<=100 &&
                           !/^(shop|cửa hàng|xem shop|xem cửa hàng|chat ngay|đánh giá|sản phẩm)$/i.test(s);
                       };
+                      const body = document.body?.innerText || '';
                       let shop = '';
-                      // Shopee product page renders seller block as: "SHOP NAME ... Xem Shop".
-                      // Find the exact "Xem Shop" control, then read the shop-name text immediately before it.
-                      const shopControls = [...document.querySelectorAll('a,button,span,div')].filter(e =>
-                        clean(e.innerText || e.textContent).toLowerCase() === 'xem shop');
-                      for (const control of shopControls) {
-                        let node = control;
-                        for (let level=0; level<5 && node && !shop; level++, node=node.parentElement) {
-                          const text = clean(node.innerText || node.textContent);
-                          const pos = text.toLowerCase().lastIndexOf('xem shop');
-                          if (pos < 1) continue;
-                          let before = clean(text.slice(0,pos));
-                          before = before.replace(/\\s+\\d+\\s*(giây|phút|giờ|ngày|seconds?|minutes?|hours?|days?).*$/i,'');
-                          const parts = before.split(/\\n+/).map(clean).filter(Boolean);
-                          const candidate = parts[parts.length-1] || before;
-                          if (valid(candidate) && !/^(shop|cửa hàng|người bán)$/i.test(candidate)) {
-                            shop = candidate;
-                            break;
-                          }
+
+                      // Trên trang sản phẩm Shopee, seller block hiển thị dạng:
+                      // "TMINSVN Online 2 phút trước Xem Shop 1,5K Sản phẩm..."
+                      const patterns = [
+                        /([^\n]{2,100}?)\s+\d+\s*(?:giây|phút|giờ|ngày)\s+trước\s+Xem Shop/i,
+                        /([^\n]{2,100}?)\s+Xem Shop\s+\d[\d.,]*\s*Sản phẩm/i,
+                        /([^\n]{2,100}?)\s+Xem Shop/i
+                      ];
+                      for (const pattern of patterns) {
+                        const match = body.match(pattern);
+                        if (match && valid(match[1])) {
+                          shop = clean(match[1]);
+                          break;
                         }
                       }
-                      // Fallback: parse the rendered seller line from page text.
+
+                      // Fallback lấy text của liên kết shop, nếu Shopee render link riêng.
                       if (!shop) {
-                        const body = document.body?.innerText || '';
-                        const match = body.match(/([^\\n]{2,100}?)\\s+(?:\\d+\\s*)?(?:giây|phút|giờ|ngày)\\s+trước\\s+Xem Shop/i);
-                        if (match && valid(match[1])) shop = clean(match[1]);
+                        const links = [...document.querySelectorAll('a[href]')].map(a => ({
+                          href: a.getAttribute('href') || '',
+                          text: clean(a.innerText || a.textContent)
+                        })).filter(x => /shop|seller/i.test(x.href) && valid(x.text));
+                        if (links.length) shop = links.sort((a,b)=>b.text.length-a.text.length)[0].text;
                       }
-                      // Fallback: Shopee shop links; exclude generic navigation links.
-                      if (!shop) {
-                        const links = [...document.querySelectorAll('a[href]')].filter(a => {
-                          const href=a.getAttribute('href') || '';
-                          const text=clean(a.innerText || a.textContent);
-                          return valid(text) && /\\/(?:shop|seller)\\//i.test(href);
-                        });
-                        shop = clean(links.sort((a,b)=>clean(b.innerText).length-clean(a.innerText).length)[0]?.innerText || '');
-                      }
-                      return { shopName: valid(shop) ? clean(shop) : '' };
+                      return { shopName: valid(shop) ? shop : '', bodyHasXemShop: /Xem Shop/i.test(body) };
                     })();
                     """;
                     var raw = await browser.CoreWebView2.ExecuteScriptAsync(script);
