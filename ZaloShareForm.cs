@@ -32,17 +32,10 @@ public sealed class SaleDealItem
 
 public sealed partial class MainForm : Form
 {
+    // Đã bỏ thanh menu Zalo cũ ở góc trên để tránh trùng lặp,
+    // chỉ dùng duy nhất nút "Gửi tin nhắn vào Zalo" trên giao diện chính.
     private void InitializeZaloMenu()
     {
-        var menu = new MenuStrip();
-        var zaloMenu = new ToolStripMenuItem("Zalo & Auto Addlivetag");
-        var sendItem = new ToolStripMenuItem("Mở bảng Auto Addlivetag API & Gửi Zalo tự động");
-        sendItem.Click += (_, _) => OpenZaloForSelectedProducts();
-        zaloMenu.DropDownItems.Add(sendItem);
-        menu.Items.Add(zaloMenu);
-        MainMenuStrip = menu;
-        Controls.Add(menu);
-        menu.BringToFront();
     }
 
     private void OpenZaloLogin() => OpenZaloForSelectedProducts();
@@ -115,87 +108,87 @@ internal sealed class ZaloShareForm : Form
         "ToolAffiliate", "addlivetag-config.json");
 
     private bool initialized;
-    private bool sending;
     private bool autoPilotRunning;
     private CancellationTokenSource? sendCts;
     private int keywordRotateIndex;
 
     public ZaloShareForm(string message)
     {
-        Text = "Tool Affiliate - Auto Lấy Deal Sale (Addlivetag API) & Tự Động Chia Sẻ Zalo";
-        Width = 1280;
-        Height = 900;
-        MinimumSize = new Size(1020, 740);
+        Text = "Tool Affiliate - Tự Động Gửi Tin Nhắn Zalo (Addlivetag Auto)";
+        Width = 1260;
+        Height = 880;
+        MinimumSize = new Size(1020, 720);
         StartPosition = FormStartPosition.CenterParent;
 
-        // Khung cấu hình Addlivetag API ở phía trên
-        var apiPanel = new Panel
+        // Phần trên: Khung Zalo Web chiếm toàn bộ không gian chính
+        zaloBrowser.Dock = DockStyle.Fill;
+
+        // Phần dưới: Gom toàn bộ phần Zalo Tự Động xuống khu vực gửi tin nhắn Zalo
+        var bottom = new Panel
+        {
+            Dock = DockStyle.Bottom,
+            Height = 320,
+            Padding = new Padding(10, 8, 10, 6),
+            BackColor = Color.FromArgb(246, 248, 252)
+        };
+
+        // 1. Khung cấu hình Addlivetag & Thời gian tự động (Nằm gọn trong phần gửi tin nhắn bên dưới)
+        var configGroup = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 92,
-            Padding = new Padding(10, 6, 10, 6),
-            BackColor = Color.FromArgb(245, 248, 252)
+            Height = 72
         };
 
-        var lblKey = new Label { Text = "API Key (addlivetag.com):", Left = 10, Top = 10, Width = 155, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) };
-        apiKeyBox.SetBounds(165, 7, 290, 25);
-        apiKeyBox.PlaceholderText = "Dán X-API-Key lấy từ addlivetag.com...";
+        var lblKey = new Label { Text = "API Key Addlivetag:", Left = 0, Top = 6, Width = 125, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) };
+        apiKeyBox.SetBounds(126, 3, 250, 25);
+        apiKeyBox.PlaceholderText = "Dán X-API-Key từ addlivetag.com...";
 
-        var lblAffId = new Label { Text = "Affiliate ID:", Left = 465, Top = 10, Width = 78, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) };
-        affIdBox.SetBounds(545, 7, 130, 25);
+        var lblAffId = new Label { Text = "Affiliate ID:", Left = 386, Top = 6, Width = 75, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) };
+        affIdBox.SetBounds(462, 3, 120, 25);
         affIdBox.PlaceholderText = "VD: 1739201xxxx";
 
-        var lblSubId = new Label { Text = "SubID:", Left = 685, Top = 10, Width = 45 };
-        subIdBox.SetBounds(732, 7, 80, 25);
+        var lblSubId = new Label { Text = "SubID:", Left = 592, Top = 6, Width = 45 };
+        subIdBox.SetBounds(638, 3, 75, 25);
         subIdBox.Text = "zalo";
 
-        var fetchNowBtn = new Button
-        {
-            Text = "Lấy Deal Sale & Tạo Link Ngay",
-            Left = 825,
-            Top = 5,
-            Width = 215,
-            Height = 29,
-            BackColor = Color.FromArgb(225, 240, 255)
-        };
-
-        var lblKw = new Label { Text = "Từ khóa săn Sale (xoay vòng):", Left = 10, Top = 42, Width = 180 };
-        keywordsBox.SetBounds(192, 39, 350, 25);
-        keywordsBox.PlaceholderText = "flash sale, deal 1k, gia dụng, tai nghe...";
-
-        var lblCount = new Label { Text = "Số SP/đợt:", Left = 552, Top = 42, Width = 68 };
-        batchCountInput.SetBounds(620, 39, 55, 25);
+        var lblCount = new Label { Text = "Số SP/đợt:", Left = 725, Top = 6, Width = 68 };
+        batchCountInput.SetBounds(794, 3, 52, 25);
         batchCountInput.Minimum = 1;
         batchCountInput.Maximum = 20;
         batchCountInput.Value = 5;
 
-        var lblCycle = new Label { Text = "Chu kỳ tự gửi lại (phút):", Left = 685, Top = 42, Width = 145 };
-        cycleMinutesInput.SetBounds(832, 39, 60, 25);
+        var lblCycle = new Label { Text = "Lặp lại sau (phút):", Left = 858, Top = 6, Width = 112 };
+        cycleMinutesInput.SetBounds(972, 3, 58, 25);
         cycleMinutesInput.Minimum = 1;
         cycleMinutesInput.Maximum = 1440;
         cycleMinutesInput.Value = 30;
 
-        var hintLabel = new Label
-        {
-            Text = "💡 Nhập API Key Addlivetag -> Bấm 'BẬT AUTO' bên dưới: Phần mềm sẽ tự lấy sản phẩm sale, tự gắn link Affiliate và tự gửi vào các nhóm Zalo mà không cần bấm tay.",
-            Left = 10,
-            Top = 68,
-            Width = 1220,
-            Height = 20,
-            ForeColor = Color.DarkSlateGray
-        };
+        var lblKw = new Label { Text = "Từ khóa săn Sale:", Left = 0, Top = 38, Width = 125, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) };
+        keywordsBox.SetBounds(126, 35, 456, 25);
+        keywordsBox.PlaceholderText = "flash sale, giảm giá, deal 1k, tai nghe, đồ gia dụng...";
 
-        apiPanel.Controls.AddRange(new Control[]
+        var lblDelay1 = new Label { Text = "Nghỉ chống spam giữa các nhóm:", Left = 592, Top = 38, Width = 195 };
+        minDelayInput.SetBounds(788, 35, 52, 25);
+        minDelayInput.Minimum = 5;
+        minDelayInput.Maximum = 600;
+        minDelayInput.Value = 15;
+
+        var lblDelay2 = new Label { Text = "đến", Left = 845, Top = 38, Width = 30 };
+        maxDelayInput.SetBounds(876, 35, 52, 25);
+        maxDelayInput.Minimum = 5;
+        maxDelayInput.Maximum = 600;
+        maxDelayInput.Value = 30;
+
+        var lblDelay3 = new Label { Text = "giây/nhóm", Left = 934, Top = 38, Width = 80 };
+
+        configGroup.Controls.AddRange(new Control[]
         {
-            lblKey, apiKeyBox, lblAffId, affIdBox, lblSubId, subIdBox, fetchNowBtn,
-            lblKw, keywordsBox, lblCount, batchCountInput, lblCycle, cycleMinutesInput, hintLabel
+            lblKey, apiKeyBox, lblAffId, affIdBox, lblSubId, subIdBox,
+            lblCount, batchCountInput, lblCycle, cycleMinutesInput,
+            lblKw, keywordsBox, lblDelay1, minDelayInput, lblDelay2, maxDelayInput, lblDelay3
         });
 
-        zaloBrowser.Dock = DockStyle.Fill;
-
-        // Khung phía dưới: Nội dung tin nhắn + Danh sách nhóm + Nút điều khiển
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 245, Padding = new Padding(10) };
-
+        // 2. Khung chia đôi: Nội dung tin nhắn tự động (Trái) & Danh sách nhóm Zalo (Phải)
         var splitBottom = new SplitContainer
         {
             Dock = DockStyle.Fill,
@@ -203,7 +196,13 @@ internal sealed class ZaloShareForm : Form
             SplitterWidth = 8
         };
 
-        var msgLabel = new Label { Text = "Nội dung tin nhắn (tự động cập nhật khi lấy Deal hoặc tự sửa):", Dock = DockStyle.Top, Height = 22, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
+        var msgLabel = new Label
+        {
+            Text = "Nội dung tin nhắn (tự động điền khi chạy Auto hoặc chỉnh sửa trực tiếp):",
+            Dock = DockStyle.Top,
+            Height = 22,
+            Font = new Font("Segoe UI", 9, FontStyle.Bold)
+        };
         messageBox.Multiline = true;
         messageBox.ScrollBars = ScrollBars.Vertical;
         messageBox.Dock = DockStyle.Fill;
@@ -212,7 +211,13 @@ internal sealed class ZaloShareForm : Form
         splitBottom.Panel1.Controls.Add(messageBox);
         splitBottom.Panel1.Controls.Add(msgLabel);
 
-        var grpLabel = new Label { Text = "Danh sách tên nhóm Zalo nhận tin (Mỗi dòng 1 nhóm):", Dock = DockStyle.Top, Height = 22, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
+        var grpLabel = new Label
+        {
+            Text = "Danh sách tên nhóm Zalo tự động gửi (Mỗi dòng 1 nhóm):",
+            Dock = DockStyle.Top,
+            Height = 22,
+            Font = new Font("Segoe UI", 9, FontStyle.Bold)
+        };
         groupsBox.Multiline = true;
         groupsBox.ScrollBars = ScrollBars.Vertical;
         groupsBox.Dock = DockStyle.Fill;
@@ -221,46 +226,44 @@ internal sealed class ZaloShareForm : Form
         splitBottom.Panel2.Controls.Add(groupsBox);
         splitBottom.Panel2.Controls.Add(grpLabel);
 
+        // 3. Thanh nút điều khiển Auto duy nhất ở dưới cùng
         var actions = new FlowLayoutPanel
         {
             Dock = DockStyle.Bottom,
             Height = 42,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Padding = new Padding(0, 5, 0, 0)
+            Padding = new Padding(0, 6, 0, 0)
         };
 
         var autoPilotBtn = new Button
         {
-            Text = "🚀 BẬT AUTO: TỰ LẤY SALE & TỰ GỬI ZALO",
-            Width = 290,
+            Text = "🚀 BẬT ZALO TỰ ĐỘNG (TỰ LẤY LINK SALE & TỰ GỬI)",
+            Width = 360,
             Height = 32,
             Font = new Font("Segoe UI", 9, FontStyle.Bold),
-            BackColor = Color.FromArgb(212, 245, 220)
+            BackColor = Color.FromArgb(210, 245, 218)
         };
-        var sendMultiBtn = new Button { Text = "Gửi ngay vào DS nhóm", Width = 165, Height = 32 };
-        var sendCurrentBtn = new Button { Text = "Gửi nhóm đang mở", Width = 140, Height = 32 };
-        var stopBtn = new Button { Text = "Dừng", Width = 80, Height = 32, Enabled = false, BackColor = Color.FromArgb(255, 228, 228) };
 
-        var delayLabel1 = new Label { Text = "Nghỉ giữa các nhóm:", AutoSize = true, Margin = new Padding(8, 8, 2, 0) };
-        minDelayInput.Minimum = 5;
-        minDelayInput.Maximum = 600;
-        minDelayInput.Value = 15;
-        minDelayInput.Width = 52;
-        minDelayInput.Margin = new Padding(2, 4, 2, 0);
+        var fetchPreviewBtn = new Button
+        {
+            Text = "🔄 Lấy thử link Sale mới",
+            Width = 175,
+            Height = 32,
+            BackColor = Color.FromArgb(228, 240, 255)
+        };
 
-        var delayLabel2 = new Label { Text = "đến:", AutoSize = true, Margin = new Padding(2, 8, 2, 0) };
-        maxDelayInput.Minimum = 5;
-        maxDelayInput.Maximum = 600;
-        maxDelayInput.Value = 30;
-        maxDelayInput.Width = 52;
-        maxDelayInput.Margin = new Padding(2, 4, 2, 0);
-
-        var delayLabel3 = new Label { Text = "giây", AutoSize = true, Margin = new Padding(2, 8, 0, 0) };
+        var stopBtn = new Button
+        {
+            Text = "⏹ Dừng tự động",
+            Width = 135,
+            Height = 32,
+            Enabled = false,
+            BackColor = Color.FromArgb(255, 228, 228)
+        };
 
         LoadSavedConfig();
 
-        // Lưu tự động khi người dùng thay đổi cấu hình
         EventHandler saveHandler = (_, _) => SaveConfig();
         apiKeyBox.TextChanged += saveHandler;
         affIdBox.TextChanged += saveHandler;
@@ -272,9 +275,11 @@ internal sealed class ZaloShareForm : Form
         minDelayInput.ValueChanged += saveHandler;
         maxDelayInput.ValueChanged += saveHandler;
 
-        fetchNowBtn.Click += async (_, _) =>
+        autoPilotBtn.Click += async (_, _) => await StartFullAutoPilotAsync(autoPilotBtn, fetchPreviewBtn, stopBtn);
+
+        fetchPreviewBtn.Click += async (_, _) =>
         {
-            fetchNowBtn.Enabled = false;
+            fetchPreviewBtn.Enabled = false;
             try
             {
                 var (ok, msg) = await FetchAndBuildSaleMessageAsync(CancellationToken.None);
@@ -283,37 +288,32 @@ internal sealed class ZaloShareForm : Form
             }
             finally
             {
-                if (!IsDisposed) fetchNowBtn.Enabled = true;
+                if (!IsDisposed) fetchPreviewBtn.Enabled = true;
             }
         };
 
-        autoPilotBtn.Click += async (_, _) => await StartFullAutoPilotAsync(autoPilotBtn, sendMultiBtn, sendCurrentBtn, stopBtn);
-        sendMultiBtn.Click += async (_, _) => await RunManualMultiGroupSendAsync(autoPilotBtn, sendMultiBtn, sendCurrentBtn, stopBtn);
-        sendCurrentBtn.Click += async (_, _) => await RunManualSingleSendAsync(autoPilotBtn, sendMultiBtn, sendCurrentBtn);
         stopBtn.Click += (_, _) =>
         {
             sendCts?.Cancel();
-            statusLabel.Text = "Đang dừng tiến trình tự động...";
+            statusLabel.Text = "Đang dừng chế độ tự động...";
         };
 
-        actions.Controls.AddRange(new Control[]
-        {
-            autoPilotBtn, sendMultiBtn, sendCurrentBtn, stopBtn,
-            delayLabel1, minDelayInput, delayLabel2, maxDelayInput, delayLabel3
-        });
+        actions.Controls.AddRange(new Control[] { autoPilotBtn, fetchPreviewBtn, stopBtn });
 
         statusLabel.Dock = DockStyle.Bottom;
         statusLabel.Height = 24;
         statusLabel.Padding = new Padding(4, 4, 0, 0);
+        statusLabel.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+        statusLabel.ForeColor = Color.FromArgb(25, 90, 160);
         statusLabel.Text = "Đang chuẩn bị Zalo Web...";
 
         bottom.Controls.Add(splitBottom);
+        bottom.Controls.Add(configGroup);
         bottom.Controls.Add(actions);
         bottom.Controls.Add(statusLabel);
 
         Controls.Add(zaloBrowser);
         Controls.Add(bottom);
-        Controls.Add(apiPanel);
 
         Shown += async (_, _) =>
         {
@@ -324,6 +324,7 @@ internal sealed class ZaloShareForm : Form
             }));
             await InitializeZaloAsync();
         };
+
         FormClosed += (_, _) =>
         {
             sendCts?.Cancel();
@@ -399,7 +400,7 @@ internal sealed class ZaloShareForm : Form
             zaloBrowser.CoreWebView2.NavigationCompleted += (_, args) =>
             {
                 statusLabel.Text = args.IsSuccess
-                    ? "Zalo Web đã sẵn sàng. Nhập API Key Addlivetag + Danh sách nhóm rồi bấm 'BẬT AUTO' để chạy hoàn toàn tự động."
+                    ? "Zalo Web sẵn sàng. Hãy điền thông tin bên dưới và bấm 'BẬT ZALO TỰ ĐỘNG'."
                     : "Không tải được Zalo Web. Kiểm tra kết nối Internet.";
             };
             zaloBrowser.CoreWebView2.Navigate("https://chat.zalo.me/");
@@ -410,12 +411,9 @@ internal sealed class ZaloShareForm : Form
         }
     }
 
-    // =========================================================================
-    // LUỒNG AUTO-PILOT: TỰ LẤY SẢN PHẨM SALE ADDLIVETAG -> TỰ TẠO LINK -> TỰ GỬI ZALO
-    // =========================================================================
-    private async Task StartFullAutoPilotAsync(Button autoBtn, Button multiBtn, Button singleBtn, Button stopBtn)
+    private async Task StartFullAutoPilotAsync(Button autoBtn, Button previewBtn, Button stopBtn)
     {
-        if (sending || autoPilotRunning) return;
+        if (autoPilotRunning) return;
         if (zaloBrowser.CoreWebView2 is null)
         {
             MessageBox.Show(this, "Zalo Web chưa sẵn sàng.", "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -423,19 +421,17 @@ internal sealed class ZaloShareForm : Form
         }
 
         var groups = GetTargetGroups();
-        if (groups.Count == 0 && string.IsNullOrWhiteSpace(apiKeyBox.Text))
+        if (groups.Count == 0 && string.IsNullOrWhiteSpace(apiKeyBox.Text) && string.IsNullOrWhiteSpace(messageBox.Text))
         {
             MessageBox.Show(this,
-                "Để chạy Auto hoàn toàn:\n1) Hãy nhập API Key của Addlivetag ở thanh phía trên.\n2) Nhập danh sách nhóm Zalo ở ô bên phải (hoặc mở sẵn 1 nhóm Zalo nếu chỉ muốn gửi vào nhóm đang mở).",
-                "Hướng dẫn bật Auto", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                "Vui lòng nhập API Key Addlivetag (hoặc nội dung tin nhắn) và danh sách nhóm Zalo ở khung bên dưới trước khi bật tự động.",
+                "Thiếu thông tin", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
         autoPilotRunning = true;
-        sending = true;
         autoBtn.Enabled = false;
-        multiBtn.Enabled = false;
-        singleBtn.Enabled = false;
+        previewBtn.Enabled = false;
         stopBtn.Enabled = true;
 
         sendCts = new CancellationTokenSource();
@@ -447,27 +443,27 @@ internal sealed class ZaloShareForm : Form
             while (!token.IsCancellationRequested)
             {
                 batchNumber++;
-                statusLabel.Text = $"[Auto Đợt #{batchNumber}] Đang gọi API Addlivetag lấy sản phẩm sale mới...";
 
-                // 1. Nếu có API Key Addlivetag, tự động lấy sản phẩm sale mới và dựng nội dung tin nhắn
+                // 1. Tự động lấy sản phẩm sale mới từ Addlivetag nếu có API Key
                 if (!string.IsNullOrWhiteSpace(apiKeyBox.Text))
                 {
+                    statusLabel.Text = $"[Đợt #{batchNumber}] Đang tự động lấy sản phẩm sale từ Addlivetag API...";
                     var (fetchedOk, fetchedMsg) = await FetchAndBuildSaleMessageAsync(token);
-                    statusLabel.Text = $"[Auto Đợt #{batchNumber}] {fetchedMsg}";
+                    statusLabel.Text = $"[Đợt #{batchNumber}] {fetchedMsg}";
                     if (!fetchedOk && string.IsNullOrWhiteSpace(messageBox.Text))
                     {
-                        await WaitWithCountdownAsync(60, "Lỗi lấy API Addlivetag, sẽ thử lại sau", token);
+                        await WaitWithCountdownAsync(60, "Chưa lấy được sản phẩm, tự thử lại sau", token);
                         continue;
                     }
                 }
 
                 if (string.IsNullOrWhiteSpace(messageBox.Text))
                 {
-                    statusLabel.Text = "Nội dung tin nhắn trống. Hãy nhập API Key Addlivetag hoặc soạn sẵn nội dung.";
+                    statusLabel.Text = "Nội dung tin nhắn đang trống. Hãy nhập API Key Addlivetag hoặc nội dung tin nhắn.";
                     break;
                 }
 
-                // 2. Tự động chia sẻ vào danh sách nhóm Zalo (hoặc nhóm đang mở nếu danh sách nhóm để trống)
+                // 2. Tự động gửi vào các nhóm Zalo (không cần bấm xác nhận)
                 groups = GetTargetGroups();
                 int minSec = (int)Math.Min(minDelayInput.Value, maxDelayInput.Value);
                 int maxSec = (int)Math.Max(minDelayInput.Value, maxDelayInput.Value);
@@ -479,7 +475,7 @@ internal sealed class ZaloShareForm : Form
                     {
                         token.ThrowIfCancellationRequested();
                         var groupName = groups[i];
-                        statusLabel.Text = $"[Auto Đợt #{batchNumber} - Nhóm {i + 1}/{groups.Count}] Đang mở nhóm '{groupName}'...";
+                        statusLabel.Text = $"[Đợt #{batchNumber} - Nhóm {i + 1}/{groups.Count}] Đang mở nhóm '{groupName}'...";
 
                         if (await SelectGroupByNameAsync(groupName, token))
                         {
@@ -491,38 +487,36 @@ internal sealed class ZaloShareForm : Form
                         if (i < groups.Count - 1)
                         {
                             int delaySec = Random.Shared.Next(minSec, maxSec + 1);
-                            await WaitWithCountdownAsync(delaySec, $"[Auto Đợt #{batchNumber}] Đã gửi {sentCount}/{i + 1} nhóm. Nghỉ chống spam", token);
+                            await WaitWithCountdownAsync(delaySec, $"[Đợt #{batchNumber}] Đã gửi {sentCount}/{i + 1} nhóm. Nghỉ chống spam", token);
                         }
                     }
                 }
                 else
                 {
-                    statusLabel.Text = $"[Auto Đợt #{batchNumber}] Đang tự động gửi vào cuộc trò chuyện đang mở...";
+                    statusLabel.Text = $"[Đợt #{batchNumber}] Đang tự động gửi vào nhóm đang mở...";
                     await SendMessageToCurrentOpenChatAsync();
                 }
 
-                // 3. Nghỉ theo chu kỳ phút trước khi tự động lấy đợt sản phẩm sale tiếp theo
+                // 3. Nghỉ hết chu kỳ phút trước khi sang đợt tự động tiếp theo
                 int cycleSeconds = (int)cycleMinutesInput.Value * 60;
-                await WaitWithCountdownAsync(cycleSeconds, $"[Hoàn tất Đợt #{batchNumber}] Đang chờ đến đợt lấy sản phẩm sale tiếp theo", token);
+                await WaitWithCountdownAsync(cycleSeconds, $"[Xong đợt #{batchNumber}] Tự động lấy sale & gửi đợt tiếp theo sau", token);
             }
         }
         catch (OperationCanceledException)
         {
-            statusLabel.Text = "Đã dừng chế độ Auto.";
+            statusLabel.Text = "Đã dừng chế độ Zalo tự động.";
         }
         catch (Exception ex)
         {
-            statusLabel.Text = "Lỗi Auto: " + ex.Message;
+            statusLabel.Text = "Lỗi khi chạy tự động: " + ex.Message;
         }
         finally
         {
             autoPilotRunning = false;
-            sending = false;
             if (!IsDisposed)
             {
                 autoBtn.Enabled = true;
-                multiBtn.Enabled = true;
-                singleBtn.Enabled = true;
+                previewBtn.Enabled = true;
                 stopBtn.Enabled = false;
             }
         }
@@ -534,22 +528,19 @@ internal sealed class ZaloShareForm : Form
         {
             token.ThrowIfCancellationRequested();
             if (remain >= 60)
-                statusLabel.Text = $"{prefix}: còn {remain / 60} phút {remain % 60} giây...";
+                statusLabel.Text = $"{prefix}: {remain / 60} phút {remain % 60} giây...";
             else
-                statusLabel.Text = $"{prefix}: còn {remain} giây...";
+                statusLabel.Text = $"{prefix}: {remain} giây...";
             await Task.Delay(1000, token);
         }
     }
 
-    // =========================================================================
-    // KẾT NỐI API ADDLIVETAG: LẤY SẢN PHẨM SALE & TẠO LINK AFFILIATE TỰ ĐỘNG
-    // =========================================================================
     private async Task<(bool Ok, string Message)> FetchAndBuildSaleMessageAsync(CancellationToken token)
     {
         var apiKey = apiKeyBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            return (false, "Vui lòng nhập API Key lấy từ addlivetag.com (mục API Key).");
+            return (false, "Hãy nhập API Key Addlivetag ở dòng cấu hình bên dưới.");
         }
 
         var keywords = keywordsBox.Text
@@ -561,21 +552,17 @@ internal sealed class ZaloShareForm : Form
         keywordRotateIndex++;
 
         int needed = (int)batchCountInput.Value;
-        statusLabel.Text = $"Đang tìm sản phẩm sale trên Addlivetag API (Từ khóa: '{(string.IsNullOrEmpty(currentKeyword) ? "Tất cả" : currentKeyword)}')...";
-
         var deals = await QueryAddlivetagDealsAsync(apiKey, currentKeyword, needed * 3, token);
         if (deals.Count == 0 && !string.IsNullOrEmpty(currentKeyword))
         {
-            // Fallback tìm kiếm toàn sàn nếu từ khóa cụ thể không trả về kết quả
             deals = await QueryAddlivetagDealsAsync(apiKey, "", needed * 3, token);
         }
 
         if (deals.Count == 0)
         {
-            return (false, "Không lấy được sản phẩm từ Addlivetag API. Hãy kiểm tra lại API Key hoặc hạn mức.");
+            return (false, "Không lấy được sản phẩm từ Addlivetag API. Hãy kiểm tra lại API Key.");
         }
 
-        // Ưu tiên chọn các sản phẩm chưa từng gửi trong phiên chạy này
         var selectedDeals = deals
             .Where(d => !string.IsNullOrWhiteSpace(d.ProductUrl) && (string.IsNullOrEmpty(d.ItemId) || !sentItemIds.Contains(d.ItemId)))
             .Take(needed)
@@ -592,11 +579,8 @@ internal sealed class ZaloShareForm : Form
             if (!string.IsNullOrEmpty(d.ItemId)) sentItemIds.Add(d.ItemId);
         }
 
-        // Bước 2: Chuyển đổi sang link Affiliate của bạn qua API Addlivetag (hoặc an_redir)
-        statusLabel.Text = $"Đang tạo {selectedDeals.Count} link Affiliate qua Addlivetag...";
         await PopulateAffiliateLinksAsync(apiKey, selectedDeals, token);
 
-        // Bước 3: Dựng nội dung tin nhắn hấp dẫn để chia sẻ
         var lines = new List<string>
         {
             string.IsNullOrWhiteSpace(currentKeyword)
@@ -616,7 +600,7 @@ internal sealed class ZaloShareForm : Form
         lines.Add("⚡ Vào link áp thêm mã giảm giá trên Shopee trước khi hết lượt nhé!");
 
         messageBox.Text = string.Join(Environment.NewLine, lines);
-        return (true, $"Đã tự động lấy {selectedDeals.Count} sản phẩm sale & tạo link Affiliate thành công!");
+        return (true, $"Đã tự động lấy {selectedDeals.Count} sản phẩm sale & tạo link Affiliate!");
     }
 
     private async Task<List<SaleDealItem>> QueryAddlivetagDealsAsync(string apiKey, string keyword, int limit, CancellationToken token)
@@ -625,7 +609,6 @@ internal sealed class ZaloShareForm : Form
         var encodedKw = Uri.EscapeDataString(keyword ?? "");
         var encodedKey = Uri.EscapeDataString(apiKey);
 
-        // Thử lần lượt Product Offer API và Market Search API của data.addlivetag.com
         var candidateUrls = new[]
         {
             $"https://data.addlivetag.com/offers/product-offer.php?keyword={encodedKw}&page=1&limit={limit}&key={encodedKey}",
@@ -660,7 +643,6 @@ internal sealed class ZaloShareForm : Form
     {
         if (root.ValueKind == JsonValueKind.Object)
         {
-            // Kiểm tra nếu object hiện tại là 1 sản phẩm
             string name = GetFirstString(root, "productName", "item_name", "name", "title", "offerName");
             string link = GetFirstString(root, "productLink", "originalLink", "item_url", "url", "offerLink", "link");
             string itemId = GetFirstString(root, "itemId", "item_id", "id");
@@ -712,7 +694,6 @@ internal sealed class ZaloShareForm : Form
         var sub1 = CleanSubId(subIdBox.Text.Trim());
         if (string.IsNullOrEmpty(sub1)) sub1 = "zalo";
 
-        // Chia từng cụm tối đa 5 link để gọi API tạo shortlink chính chủ: https://addlivetag.com/api/v1/shopee-link.php
         for (int i = 0; i < deals.Count; i += 5)
         {
             var chunk = deals.Skip(i).Take(5).ToList();
@@ -755,8 +736,6 @@ internal sealed class ZaloShareForm : Form
             catch { }
         }
 
-        // Dự phòng: Nếu link nào chưa có short_link (do chưa gắn cookie trên web addlivetag),
-        // tự động build link chuẩn Shopee 2026 (an_redir) từ Affiliate ID của người dùng
         foreach (var deal in deals)
         {
             if (string.IsNullOrWhiteSpace(deal.AffiliateUrl))
@@ -811,7 +790,7 @@ internal sealed class ZaloShareForm : Form
         if (string.IsNullOrWhiteSpace(raw)) return "";
         if (decimal.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var num))
         {
-            if (num > 100000000) num /= 100000; // Phòng trường hợp giá Shopee nhân 100000
+            if (num > 100000000) num /= 100000;
             return string.Format(System.Globalization.CultureInfo.GetCultureInfo("vi-VN"), "{0:N0}đ", num);
         }
         return raw;
@@ -823,105 +802,6 @@ internal sealed class ZaloShareForm : Form
             .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-
-    // =========================================================================
-    // GỬI TỰ ĐỘNG KHÔNG CẦN XÁC NHẬN POPUP
-    // =========================================================================
-    private async Task RunManualSingleSendAsync(Button autoBtn, Button multiBtn, Button singleBtn)
-    {
-        if (sending) return;
-        if (zaloBrowser.CoreWebView2 is null || string.IsNullOrWhiteSpace(messageBox.Text)) return;
-
-        sending = true;
-        autoBtn.Enabled = false;
-        multiBtn.Enabled = false;
-        singleBtn.Enabled = false;
-        try
-        {
-            var (_, message) = await SendMessageToCurrentOpenChatAsync();
-            statusLabel.Text = message;
-        }
-        finally
-        {
-            sending = false;
-            if (!IsDisposed)
-            {
-                autoBtn.Enabled = true;
-                multiBtn.Enabled = true;
-                singleBtn.Enabled = true;
-            }
-        }
-    }
-
-    private async Task RunManualMultiGroupSendAsync(Button autoBtn, Button multiBtn, Button singleBtn, Button stopBtn)
-    {
-        if (sending) return;
-        var groups = GetTargetGroups();
-        if (groups.Count == 0)
-        {
-            MessageBox.Show(this, "Hãy nhập danh sách tên nhóm ở ô bên phải (mỗi dòng 1 nhóm).", "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        // Nếu ô tin nhắn đang trống mà có API Key, tự động lấy sản phẩm sale trước khi gửi
-        if (string.IsNullOrWhiteSpace(messageBox.Text) && !string.IsNullOrWhiteSpace(apiKeyBox.Text))
-        {
-            await FetchAndBuildSaleMessageAsync(CancellationToken.None);
-        }
-
-        if (string.IsNullOrWhiteSpace(messageBox.Text)) return;
-
-        sending = true;
-        autoBtn.Enabled = false;
-        multiBtn.Enabled = false;
-        singleBtn.Enabled = false;
-        stopBtn.Enabled = true;
-        sendCts = new CancellationTokenSource();
-        var token = sendCts.Token;
-
-        int minSec = (int)Math.Min(minDelayInput.Value, maxDelayInput.Value);
-        int maxSec = (int)Math.Max(minDelayInput.Value, maxDelayInput.Value);
-        int successCount = 0;
-
-        try
-        {
-            for (int i = 0; i < groups.Count; i++)
-            {
-                token.ThrowIfCancellationRequested();
-                var groupName = groups[i];
-                statusLabel.Text = $"[{i + 1}/{groups.Count}] Đang mở nhóm: {groupName}...";
-
-                if (await SelectGroupByNameAsync(groupName, token))
-                {
-                    await Task.Delay(750, token);
-                    var (ok, _) = await SendMessageToCurrentOpenChatAsync();
-                    if (ok) successCount++;
-                }
-
-                if (i < groups.Count - 1)
-                {
-                    int waitSeconds = Random.Shared.Next(minSec, maxSec + 1);
-                    await WaitWithCountdownAsync(waitSeconds, $"Đã gửi {successCount}/{i + 1} nhóm. Nghỉ chống spam", token);
-                }
-            }
-            statusLabel.Text = $"Hoàn tất: Đã tự động gửi vào {successCount}/{groups.Count} nhóm Zalo!";
-        }
-        catch (OperationCanceledException)
-        {
-            statusLabel.Text = $"Đã dừng gửi. (Đã gửi {successCount}/{groups.Count} nhóm)";
-        }
-        finally
-        {
-            sending = false;
-            if (!IsDisposed)
-            {
-                autoBtn.Enabled = true;
-                multiBtn.Enabled = true;
-                singleBtn.Enabled = true;
-                stopBtn.Enabled = false;
-            }
-        }
-    }
 
     private async Task<bool> SelectGroupByNameAsync(string groupName, CancellationToken token)
     {
