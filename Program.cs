@@ -57,6 +57,7 @@ public sealed class MainForm : Form
     private bool loading;
     private bool agentRunning;
     private bool autoAgentAfterNavigation;
+    private bool autoExtractAfterSearch;
     private bool showUnavailableOnly;
     private bool availabilityCheckRunning;
     private const string CustomLinkUrl = "https://affiliate.shopee.vn/offer/custom_link";
@@ -97,6 +98,13 @@ public sealed class MainForm : Form
                 browser.CoreWebView2.NavigationCompleted += async (_, e) =>
                 {
                     status.Text = e.IsSuccess ? "Trình duyệt sẵn sàng." : "Không tải được trang hiện tại.";
+                    if (e.IsSuccess && autoExtractAfterSearch &&
+                        browser.Source?.AbsolutePath.StartsWith("/search", StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        autoExtractAfterSearch = false;
+                        await Task.Delay(4500);
+                        await ExtractVisibleProductsAsync(10, true);
+                    }
                     if (e.IsSuccess && autoAgentAfterNavigation &&
                         browser.Source?.AbsolutePath.Equals("/offer/custom_link", StringComparison.OrdinalIgnoreCase) == true)
                     {
@@ -205,52 +213,69 @@ public sealed class MainForm : Form
     {
         var term = keyword.Text.Trim();
         if (term.Length == 0) { MessageBox.Show("Nhập từ khóa tìm kiếm."); return; }
+        autoExtractAfterSearch = true;
         Navigate("https://shopee.vn/search?keyword=" + Uri.EscapeDataString(term));
+        status.Text = "Đang tìm Shopee; sẽ tự lấy 10 link sản phẩm đầu tiên...";
     }
 
-    private async void ExtractVisibleProducts()
+    private async void ExtractVisibleProducts() => await ExtractVisibleProductsAsync(10, false);
+
+    private async Task ExtractVisibleProductsAsync(int limit, bool silent)
     {
         if (browser.CoreWebView2 is null)
         {
-            MessageBox.Show("Trình duyệt chưa sẵn sàng.");
+            if (!silent) MessageBox.Show("Trình duyệt chưa sẵn sàng.");
             return;
         }
 
-        const string script = """
+        const string scriptTemplate = """
         (() => {
-          const visible = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
+          const visible = e => { const r=e.getBoundingClientRect(); return r.width>0 && r.height>0; };
           const found = [];
           const seen = new Set();
+          const isProduct = u => {
+            try {
+              const x = new URL(u, location.href);
+              return /(^|\\.)shopee\\.vn$/i.test(x.hostname) &&
+                (/\\/product\\/\\d+\\/\\d+/i.test(x.pathname) || /-i\\.\\d+\\.\\d+/i.test(x.pathname));
+            } catch { return false; }
+          };
           for (const a of document.querySelectorAll('a[href]')) {
             if (!visible(a)) continue;
-            let href = a.href || '';
-            try { href = new URL(href, location.href).href; } catch { continue; }
-            if (!/^https:\/\/((www|m)\.)?shopee\.vn\//i.test(href)) continue;
-            if (!(/\/product\//i.test(href) || /-i\.\d+\.\d+/i.test(href))) continue;
-            const card = a.closest('[data-sqe="item"], [data-testid*="item"], li') || a.parentElement;
-            const name = ((a.innerText || a.getAttribute('aria-label') || (card && card.innerText) || '').replace(/\s+/g, ' ').trim()).slice(0, 240);
-            const key = href.split('?')[0];
-            if (seen.has(key)) continue;
-            seen.add(key);
-            found.push({ name: name || 'Sản phẩm Shopee', productUrl: key });
+            let href = '';
+            try { href = new URL(a.href, location.href).href.split('?')[0]; } catch { continue; }
+            if (!isProduct(href) || seen.has(href)) continue;
+            const card = a.closest('[data-sqe="item"], [data-testid*="item"], li') || a.parentElement?.parentElement || a.parentElement;
+            const name = ((card?.innerText || a.innerText || a.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim()).slice(0, 240);
+            seen.add(href);
+            found.push({ name: name || 'Sản phẩm Shopee', productUrl: href });
+            if (found.length >= __LIMIT__) break;
           }
-          return found.slice(0, 100);
+          return found;
         })();
         """;
+        var script = scriptTemplate.Replace("__LIMIT__", limit.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         try
         {
-            var raw = await browser.CoreWebView2.ExecuteScriptAsync(script);
-            var products = JsonSerializer.Deserialize<List<VisibleProduct>>(raw,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+            // Shopee renders search results asynchronously; retry briefly while cards appear.
+            List<VisibleProduct> products = new();
+            for (int attempt = 0; attempt < 8 && products.Count == 0; attempt++)
+            {
+                if (attempt > 0) await Task.Delay(1000);
+                var raw = await browser.CoreWebView2.ExecuteScriptAsync(script);
+                products = JsonSerializer.Deserialize<List<VisibleProduct>>(raw,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+            }
             if (products.Count == 0)
             {
-                MessageBox.Show("Không tìm thấy sản phẩm trong nội dung đang hiển thị. Hãy mở trang kết quả Shopee, chờ tải xong và thử lại.");
+                if (!silent) MessageBox.Show("Không tìm thấy link sản phẩm hợp lệ. Hãy kiểm tra trang kết quả đã tải xong chưa.");
+                status.Text = "Không tìm thấy link sản phẩm hợp lệ trên trang kết quả Shopee.";
                 return;
             }
 
             int added = 0, skipped = 0;
-            foreach (var product in products)
+            foreach (var product in products.Take(limit))
             {
                 if (!IsProductUrl(product.ProductUrl) || items.Count >= MaxProducts ||
                     items.Any(p => string.Equals(p.ProductUrl, product.ProductUrl, StringComparison.OrdinalIgnoreCase)))
@@ -272,17 +297,22 @@ public sealed class MainForm : Form
             if (added > 0)
             {
                 autoAgentAfterNavigation = true;
-                status.Text = $"Đã thêm {added} sản phẩm. Đang tự mở Custom Link...";
+                status.Text = $"Đã tự lấy {added} link sản phẩm đầu tiên. Đang mở Custom Link để tạo Affiliate...";
                 Navigate(CustomLinkUrl);
+            }
+            else if (!silent)
+            {
+                MessageBox.Show($"Đã đọc {products.Count} link đầu tiên nhưng không có sản phẩm mới (có thể đã tồn tại trong danh sách).");
             }
             else
             {
-                MessageBox.Show($"Đã đọc {products.Count} sản phẩm đang hiển thị; không có sản phẩm mới để tạo link.");
+                status.Text = $"Đã tìm thấy {products.Count} link đầu tiên; không có link mới để thêm.";
             }
         }
         catch (Exception ex)
         {
-            MessageBox.Show("Không đọc được danh sách sản phẩm: " + ex.Message);
+            if (!silent) MessageBox.Show("Không đọc được danh sách sản phẩm: " + ex.Message);
+            status.Text = "Lỗi lấy link sản phẩm: " + ex.Message;
         }
     }
 
