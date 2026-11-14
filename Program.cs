@@ -139,25 +139,40 @@ public sealed class MainForm : Form
         AddButton(panel, "Mở Shopee Affiliate", 12, 114, 280, () => Navigate("https://affiliate.shopee.vn/"));
         AddButton(panel, "Mở Custom Link", 302, 114, 288, () => Navigate(CustomLinkUrl));
 
-        panel.Controls.Add(LabelAt("2. Thêm sản phẩm", 158));
-        AddButton(panel, "Thêm URL trang đang mở", 12, 185, 280, AddCurrentPage);
-        AddButton(panel, "Sao chép link sản phẩm đang chọn", 302, 185, 288, () => CopySelected(p => p.ProductUrl));
+        AddButton(panel, "AI Agent: tự tạo link Affiliate", 12, 158, 578, () => RunAffiliateAgent());
 
-        bulkProducts.SetBounds(12, 225, 578, 76);
-        bulkProducts.Multiline = true;
-        bulkProducts.ScrollBars = ScrollBars.Vertical;
-        bulkProducts.PlaceholderText = "Dán nhiều URL sản phẩm Shopee (mỗi dòng một link, tối đa 100 sản phẩm)...";
-        panel.Controls.Add(bulkProducts);
-        AddButton(panel, "Thêm danh sách URL", 12, 306, 280, AddBulkProducts);
-        AddButton(panel, "Xóa sản phẩm đã chọn", 302, 306, 288, RemoveSelected);
+        panel.Controls.Add(LabelAt("2. Danh sách sản phẩm (tối đa 100)", 200));
+        AddButton(panel, "Kiểm tra sản phẩm không thể mua", 12, 224, 578, CheckAvailabilityForAll);
+        table.SetBounds(12, 262, 578, 563);
+        table.ReadOnly = true;
+        table.AllowUserToAddRows = false;
+        table.MultiSelect = false;
+        table.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        table.AutoGenerateColumns = false;
+        table.RowHeadersVisible = false;
+        table.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.Number), HeaderText = "STT", FillWeight = 35 });
+        table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.Name), HeaderText = "Sản phẩm", FillWeight = 90 });
+        table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.ProductUrl), HeaderText = "Link gốc", FillWeight = 125 });
+        table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.AffiliateUrl), HeaderText = "Link Affiliate", FillWeight = 125 });
+        table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.Status), HeaderText = "Trạng thái", FillWeight = 65 });
+        panel.Controls.Add(table);
 
-        panel.Controls.Add(LabelAt("3. Gắn link Affiliate theo thứ tự hàng đợi", 348));
-        bulkAffiliates.SetBounds(12, 375, 578, 76);
-        bulkAffiliates.Multiline = true;
-        bulkAffiliates.ScrollBars = ScrollBars.Vertical;
-        bulkAffiliates.PlaceholderText = "Dán các link Affiliate Shopee do Custom Link chính thức trả về, mỗi dòng một link...";
-        panel.Controls.Add(bulkAffiliates);
-        AddButton(panel, "Gắn link lần lượt cho sản phẩm đang chờ", 12, 456, 578, AttachBulkAffiliates);
+        AddButton(panel, "Mở link gốc đã chọn", 12, 835, 185, OpenSelectedProduct);
+        AddButton(panel, "Sao chép link Affiliate", 205, 835, 185, () => CopySelected(p => p.AffiliateUrl));
+        AddButton(panel, "Xuất CSV", 398, 835, 192, ExportCsv);
+        AddButton(panel, "Chỉ hiện sản phẩm không thể mua", 12, 870, 280, ToggleUnavailableFilter);
+        AddButton(panel, "Xuất DS không thể mua", 302, 870, 288, ExportUnavailableCsv);
+
+        var note = new Label
+        {
+            Text = "Tự động tìm sản phẩm, kiểm tra khả năng mua và chỉ tạo link Affiliate cho sản phẩm còn mua được. CAPTCHA/OTP sẽ yêu cầu bạn xử lý.",
+            Left = 12, Top = 906, Width = 578, Height = 45,
+            ForeColor = Color.DarkSlateGray
+        };
+        panel.Controls.Add(note);
+    }
+
         AddButton(panel, "AI Agent: tự tạo link Affiliate", 12, 492, 578, () => RunAffiliateAgent());
 
         panel.Controls.Add(LabelAt("4. Danh sách sản phẩm (tối đa 100)", 534));
