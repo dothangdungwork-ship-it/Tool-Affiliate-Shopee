@@ -47,6 +47,7 @@ public sealed class MainForm : Form
     private readonly BindingSource source = new();
     private readonly WebView2 browser = new();
     private readonly TextBox keyword = new();
+    private readonly Button loginButton = new();
     private readonly TextBox bulkProducts = new();
     private readonly TextBox bulkAffiliates = new();
     private readonly DataGridView table = new();
@@ -199,7 +200,7 @@ public sealed class MainForm : Form
         AddButton(panel, "Tìm từ khóa", 265, 75, 145, SearchShopee);
         AddButton(panel, "Lấy sản phẩm đang hiển thị", 418, 75, 172, ExtractVisibleProducts);
 
-        AddButton(panel, "Mở Shopee Affiliate", 12, 114, 280, () => Navigate("https://affiliate.shopee.vn/"));
+        AddButton(panel, "Đăng nhập Shopee bằng tài khoản", 12, 114, 280, ShowLoginDialog);
         AddButton(panel, "Mở Custom Link", 302, 114, 288, () => Navigate(CustomLinkUrl));
         AddButton(panel, "AI Agent: tự tạo link Affiliate", 12, 158, 578, () => RunAffiliateAgent());
 
@@ -290,6 +291,114 @@ public sealed class MainForm : Form
         button.Click += (_, _) => action();
         parent.Controls.Add(button);
         return button;
+    }
+
+    private void ShowLoginDialog()
+    {
+        if (browser.CoreWebView2 is null)
+        {
+            MessageBox.Show("Trang Shopee đang khởi tạo, vui lòng đợi.");
+            return;
+        }
+
+        using var dialog = new Form
+        {
+            Text = "Đăng nhập Shopee Affiliate",
+            Width = 430,
+            Height = 285,
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false
+        };
+        var phoneLabel = new Label { Text = "Số điện thoại / email / tên đăng nhập", Left = 20, Top = 20, Width = 370 };
+        var phone = new TextBox { Left = 20, Top = 45, Width = 370 };
+        var passLabel = new Label { Text = "Mật khẩu", Left = 20, Top = 82, Width = 370 };
+        var password = new TextBox { Left = 20, Top = 107, Width = 370, UseSystemPasswordChar = true };
+        var hint = new Label
+        {
+            Text = "Thông tin chỉ dùng trong phiên hiện tại. CAPTCHA/OTP có thể cần bạn xác nhận trên Shopee.",
+            Left = 20, Top = 143, Width = 370, Height = 42, ForeColor = Color.DimGray
+        };
+        var submit = new Button { Text = "Điền thông tin và đăng nhập", Left = 20, Top = 195, Width = 370, Height = 34 };
+        submit.Click += async (_, _) =>
+        {
+            if (string.IsNullOrWhiteSpace(phone.Text) || string.IsNullOrEmpty(password.Text))
+            {
+                MessageBox.Show(dialog, "Vui lòng nhập đầy đủ tài khoản và mật khẩu.");
+                return;
+            }
+            submit.Enabled = false;
+            try
+            {
+                var accountJson = JsonSerializer.Serialize(phone.Text.Trim());
+                var passwordJson = JsonSerializer.Serialize(password.Text);
+                const string script = """
+                (() => {
+                  const visible = e => {
+                    const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+                    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                  };
+                  const fields = [...document.querySelectorAll('input:not([type=hidden])')].filter(visible);
+                  const meta = e => ((e.placeholder || '') + ' ' + (e.getAttribute('aria-label') || '') + ' ' +
+                    (e.name || '') + ' ' + (e.id || '') + ' ' + (e.parentElement?.innerText || '')).toLowerCase();
+                  const user = fields.filter(e => !/password|mật khẩu/i.test((e.type || '') + ' ' + meta(e)))
+                    .sort((a,b) => {
+                      const score = e => /phone|email|username|account|số điện thoại|tài khoản|đăng nhập/i.test(meta(e)) ? 10 : 0;
+                      return score(b)-score(a);
+                    })[0];
+                  const pass = fields.find(e => e.type === 'password' || /password|mật khẩu/i.test(meta(e)));
+                  if (!user || !pass) return {ok:false, message:'Chưa nhận diện được ô tài khoản và mật khẩu trên trang Shopee. Nếu Shopee đang hiển thị QR, hãy chuyển sang đăng nhập bằng mật khẩu rồi thử lại.'};
+                  const set = (e,v) => {
+                    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+                    if (setter) setter.call(e,v); else e.value = v;
+                    e.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'}));
+                    e.dispatchEvent(new Event('change',{bubbles:true}));
+                  };
+                  set(user, __ACCOUNT__);
+                  set(pass, __PASSWORD__);
+                  const buttons = [...document.querySelectorAll('button,[role=button],input[type=submit]')].filter(visible);
+                  const submit = buttons.find(e => /log in|login|đăng nhập/i.test((e.innerText || e.value || e.getAttribute('aria-label') || '').trim()));
+                  if (submit) submit.click();
+                  else {
+                    const form = pass.closest('form') || user.closest('form');
+                    if (form) form.requestSubmit();
+                    else return {ok:false,message:'Đã điền thông tin nhưng không tìm thấy nút đăng nhập. Vui lòng kiểm tra trang Shopee.'};
+                  }
+                  return {ok:true,message:'Đã gửi thông tin đăng nhập tới biểu mẫu Shopee chính thức.'};
+                })();
+                """;
+                var raw = await browser.CoreWebView2.ExecuteScriptAsync(
+                    script.Replace("__ACCOUNT__", accountJson).Replace("__PASSWORD__", passwordJson));
+                using var result = JsonDocument.Parse(raw);
+                var root = result.RootElement;
+                var ok = root.TryGetProperty("ok", out var okValue) && okValue.GetBoolean();
+                var message = root.TryGetProperty("message", out var msgValue) ? msgValue.GetString() : "Không có phản hồi từ trang Shopee.";
+                password.Clear();
+                if (ok)
+                {
+                    MessageBox.Show(dialog, message + "\nNếu Shopee yêu cầu CAPTCHA hoặc OTP, hãy hoàn tất bước xác minh.");
+                    dialog.DialogResult = DialogResult.OK;
+                    dialog.Close();
+                }
+                else
+                {
+                    MessageBox.Show(dialog, message, "Chưa thể đăng nhập", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                password.Clear();
+                MessageBox.Show(dialog, "Không thể gửi thông tin tới trang Shopee: " + ex.Message);
+            }
+            finally
+            {
+                if (!dialog.IsDisposed) submit.Enabled = true;
+            }
+        };
+        dialog.Controls.AddRange(new Control[] { phoneLabel, phone, passLabel, password, hint, submit });
+        dialog.AcceptButton = submit;
+        dialog.ShowDialog(this);
     }
 
     private void Navigate(string url)
