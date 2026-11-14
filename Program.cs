@@ -636,8 +636,16 @@ public sealed class MainForm : Form
                 SaveData();
                 await Task.Delay(500);
             }
+            // Remove products confirmed hidden, deleted, out of stock, or discontinued.
+            var removedItems = items.Where(p => IsUnavailable(p.AvailabilityStatus)).ToList();
+            foreach (var item in removedItems) items.Remove(item);
+            Renumber();
+            showUnavailableOnly = false;
+            RefreshTable();
+            SaveData();
             Navigate(CustomLinkUrl);
-            MessageBox.Show($"Đã kiểm tra {checkedCount}/{targets.Count} sản phẩm.\\nKhông thể mua (hết hàng/ngừng bán/ẩn-xóa): {unavailable}.\\nChưa xác định, cần kiểm tra lại: {unknown}.\\nDanh sách đã được lưu. Dùng nút lọc hoặc xuất danh sách không thể mua.");
+            int buyable = items.Count(p => p.AvailabilityStatus == "Có thể mua");
+            MessageBox.Show($"Đã kiểm tra {checkedCount}/{targets.Count} sản phẩm.\\nĐã loại khỏi danh sách {removedItems.Count} sản phẩm bị ẩn/xóa, hết hàng hoặc ngừng bán.\\nCòn lại {items.Count} sản phẩm; trong đó {buyable} sản phẩm xác nhận mua được và {unknown} sản phẩm chưa xác định (không đưa vào danh sách link mua được).\\nDanh sách đã được lưu.");
         }
         catch (Exception ex)
         {
@@ -703,19 +711,28 @@ public sealed class MainForm : Form
 
     private void ExportCsv()
     {
-        using var dialog = new SaveFileDialog { Filter = "CSV UTF-8 (*.csv)|*.csv", FileName = "Shopee_Affiliate_V4.csv" };
+        var checkedProducts = items.Where(p => p.AvailabilityStatus != "Chưa kiểm tra").ToList();
+        var exportItems = checkedProducts.Count > 0
+            ? items.Where(p => p.AvailabilityStatus == "Có thể mua").ToList()
+            : items.ToList();
+        if (exportItems.Count == 0)
+        {
+            MessageBox.Show("Chưa có sản phẩm nào được xác nhận có thể mua. Hãy chạy kiểm tra khả năng mua trước khi xuất.");
+            return;
+        }
+        using var dialog = new SaveFileDialog { Filter = "CSV UTF-8 (*.csv)|*.csv", FileName = "Shopee_Affiliate_Link_Co_The_Mua.csv" };
         if (dialog.ShowDialog() != DialogResult.OK) return;
         var csv = new StringBuilder();
         csv.AppendLine("STT,Ten san pham,Product URL,Affiliate URL,Trang thai");
-        foreach (var p in items)
+        foreach (var p in exportItems)
             csv.AppendLine(string.Join(",", new[] {
                 CsvSafe(p.Number.ToString()), CsvSafe(p.Name), CsvSafe(p.ProductUrl),
-                CsvSafe(p.AffiliateUrl), CsvSafe(p.Status)
+                CsvSafe(p.AffiliateUrl), CsvSafe(p.AvailabilityStatus == "Chưa kiểm tra" ? p.Status : p.AvailabilityStatus)
             }));
         File.WriteAllText(dialog.FileName, csv.ToString(), new UTF8Encoding(true));
-        MessageBox.Show("Đã xuất CSV thành công.");
+        MessageBox.Show($"Đã xuất {exportItems.Count} sản phẩm" +
+            (checkedProducts.Count > 0 ? " đã xác nhận có thể mua." : ". Hãy kiểm tra khả năng mua để loại trừ sản phẩm hết hàng/ngừng bán."));
     }
-
     private void LoadData()
     {
         try
