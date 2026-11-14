@@ -16,6 +16,12 @@ internal static class Program
     }
 }
 
+public sealed class VisibleProduct
+{
+    public string Name { get; set; } = "";
+    public string ProductUrl { get; set; } = "";
+}
+
 public sealed class ProductItem
 {
     public int Number { get; set; }
@@ -102,10 +108,11 @@ public sealed class MainForm : Form
 
         var searchLabel = LabelAt("1. Tìm sản phẩm theo từ khóa", 48);
         panel.Controls.Add(searchLabel);
-        keyword.SetBounds(12, 76, 390, 30);
+        keyword.SetBounds(12, 76, 245, 30);
         keyword.PlaceholderText = "Ví dụ: bàn phím cơ, RTX 5060...";
         panel.Controls.Add(keyword);
-        AddButton(panel, "Tìm trên Shopee", 410, 75, 180, SearchShopee);
+        AddButton(panel, "Tìm từ khóa", 265, 75, 145, SearchShopee);
+        AddButton(panel, "Lấy sản phẩm đang hiển thị", 418, 75, 172, ExtractVisibleProducts);
 
         AddButton(panel, "Mở Shopee Affiliate", 12, 114, 280, () => Navigate("https://affiliate.shopee.vn/"));
         AddButton(panel, "Mở Custom Link", 302, 114, 288, () => Navigate("https://affiliate.shopee.vn/"));
@@ -193,6 +200,74 @@ public sealed class MainForm : Form
         var term = keyword.Text.Trim();
         if (term.Length == 0) { MessageBox.Show("Nhập từ khóa tìm kiếm."); return; }
         Navigate("https://shopee.vn/search?keyword=" + Uri.EscapeDataString(term));
+    }
+
+    private async void ExtractVisibleProducts()
+    {
+        if (browser.CoreWebView2 is null)
+        {
+            MessageBox.Show("Trình duyệt chưa sẵn sàng.");
+            return;
+        }
+
+        const string script = """
+        (() => {
+          const visible = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
+          const found = [];
+          const seen = new Set();
+          for (const a of document.querySelectorAll('a[href]')) {
+            if (!visible(a)) continue;
+            let href = a.href || '';
+            try { href = new URL(href, location.href).href; } catch { continue; }
+            if (!/^https:\/\/((www|m)\.)?shopee\.vn\//i.test(href)) continue;
+            if (!(/\/product\//i.test(href) || /-i\.\d+\.\d+/i.test(href))) continue;
+            const card = a.closest('[data-sqe="item"], [data-testid*="item"], li') || a.parentElement;
+            const name = ((a.innerText || a.getAttribute('aria-label') || (card && card.innerText) || '').replace(/\s+/g, ' ').trim()).slice(0, 240);
+            const key = href.split('?')[0];
+            if (seen.has(key)) continue;
+            seen.add(key);
+            found.push({ name: name || 'Sản phẩm Shopee', productUrl: key });
+          }
+          return found.slice(0, 100);
+        })();
+        """;
+
+        try
+        {
+            var raw = await browser.CoreWebView2.ExecuteScriptAsync(script);
+            var products = JsonSerializer.Deserialize<List<VisibleProduct>>(raw) ?? new();
+            if (products.Count == 0)
+            {
+                MessageBox.Show("Không tìm thấy sản phẩm trong nội dung đang hiển thị. Hãy mở trang kết quả Shopee, chờ tải xong và thử lại.");
+                return;
+            }
+
+            int added = 0, skipped = 0;
+            foreach (var product in products)
+            {
+                if (!IsProductUrl(product.ProductUrl) || items.Count >= MaxProducts ||
+                    items.Any(p => string.Equals(p.ProductUrl, product.ProductUrl, StringComparison.OrdinalIgnoreCase)))
+                {
+                    skipped++;
+                    continue;
+                }
+                items.Add(new ProductItem
+                {
+                    Number = items.Count + 1,
+                    Name = product.Name,
+                    ProductUrl = product.ProductUrl
+                });
+                added++;
+            }
+            RefreshTable();
+            SaveData();
+            UpdateStatus();
+            MessageBox.Show($"Đã đọc {products.Count} sản phẩm đang hiển thị; thêm mới {added}, bỏ qua {skipped} sản phẩm trùng/không hợp lệ hoặc vượt giới hạn 100.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Không đọc được danh sách sản phẩm: " + ex.Message);
+        }
     }
 
     private void AddCurrentPage()
