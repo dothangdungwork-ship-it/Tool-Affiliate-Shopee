@@ -378,8 +378,54 @@ public sealed class MainForm : Form
 
         agentRunning = true;
         int completed = 0;
+        int removedUnavailable = 0;
+        int skippedUnknown = 0;
         try
         {
+            // Pre-check every queued product before generating any affiliate link.
+            var buyableProducts = new List<ProductItem>();
+            for (int i = 0; i < pending.Count; i++)
+            {
+                var product = pending[i];
+                status.Text = $"Kiểm tra khả năng mua {i + 1}/{pending.Count}: {product.Name}";
+                try
+                {
+                    product.AvailabilityStatus = await CheckProductAvailabilityAsync(product.ProductUrl);
+                }
+                catch
+                {
+                    product.AvailabilityStatus = "Không xác định - Lỗi tải";
+                }
+                if (IsUnavailable(product.AvailabilityStatus))
+                {
+                    items.Remove(product);
+                    removedUnavailable++;
+                }
+                else if (product.AvailabilityStatus == "Có thể mua")
+                {
+                    buyableProducts.Add(product);
+                }
+                else
+                {
+                    skippedUnknown++;
+                }
+                RefreshTable();
+                SaveData();
+            }
+            Renumber();
+            RefreshTable();
+            SaveData();
+
+            if (buyableProducts.Count == 0)
+            {
+                MessageBox.Show($"Không tạo link nào. Đã tự loại {removedUnavailable} sản phẩm không thể mua; {skippedUnknown} sản phẩm chưa xác định được giữ lại để kiểm tra sau.");
+                return;
+            }
+
+            await NavigateAndWaitAsync(CustomLinkUrl, 30000);
+            await Task.Delay(1200);
+            pending = buyableProducts;
+
             foreach (var product in pending)
             {
                 status.Text = $"Agent đang tạo link {completed + 1}/{pending.Count}: {product.Name}";
@@ -477,9 +523,9 @@ public sealed class MainForm : Form
             }
 
             if (completed == pending.Count)
-                MessageBox.Show($"Hoàn tất! Agent đã tạo và lưu {completed} link Affiliate.");
+                MessageBox.Show($"Hoàn tất! Đã tạo {completed} link cho sản phẩm mua được. Tự loại {removedUnavailable} sản phẩm không thể mua; giữ lại {skippedUnknown} sản phẩm chưa xác định.");
             else if (completed > 0)
-                MessageBox.Show($"Agent đã tạo và lưu {completed}/{pending.Count} link. Các sản phẩm còn lại vẫn ở trạng thái chờ.");
+                MessageBox.Show($"Đã tạo {completed}/{pending.Count} link cho sản phẩm mua được. Tự loại {removedUnavailable} sản phẩm không thể mua; giữ lại {skippedUnknown} sản phẩm chưa xác định.");
         }
         catch (Exception ex)
         {
@@ -656,6 +702,34 @@ public sealed class MainForm : Form
             availabilityCheckRunning = false;
             UpdateStatus();
         }
+    }
+
+    private async Task<string> CheckProductAvailabilityAsync(string productUrl)
+    {
+        await NavigateAndWaitAsync(productUrl, 25000);
+        await Task.Delay(1400);
+        const string script = """
+        (() => {
+          const text = (document.body?.innerText || '').toLowerCase().replace(/\s+/g, ' ');
+          const title = (document.title || '').toLowerCase();
+          const has = terms => terms.some(t => text.includes(t) || title.includes(t));
+          if (has(['sản phẩm không tồn tại','không tìm thấy sản phẩm','sản phẩm này không tồn tại','sản phẩm đã bị xóa','sản phẩm đã bị ẩn','this product is unavailable','product not found','item not found','page not found']))
+            return 'Không thể mua - Bị ẩn/xóa';
+          if (has(['ngừng kinh doanh','ngừng bán','shop đã đóng cửa','shop is closed','temporarily unavailable','tạm ngừng bán']))
+            return 'Ngừng bán';
+          if (has(['hết hàng','đã bán hết','sold out','out of stock','tạm hết hàng']))
+            return 'Hết hàng';
+          const visible = e => { const r=e.getBoundingClientRect(); return r.width>0 && r.height>0; };
+          const buttons = [...document.querySelectorAll('button,[role=button]')].filter(visible);
+          const buy = buttons.some(e => /mua ngay|thêm vào giỏ|buy now|add to cart/i.test(e.innerText || e.getAttribute('aria-label') || '') && !e.disabled && e.getAttribute('aria-disabled')!=='true');
+          if (buy) return 'Có thể mua';
+          if (text.length < 250 || /access denied|captcha|verify you are human|đang tải|loading/.test(text))
+            return 'Không xác định - Lỗi tải';
+          return 'Không xác định - Cần kiểm tra';
+        })();
+        """;
+        var raw = await browser.CoreWebView2.ExecuteScriptAsync(script);
+        return JsonSerializer.Deserialize<string>(raw) ?? "Không xác định - Cần kiểm tra";
     }
 
     private async Task NavigateAndWaitAsync(string url, int timeoutMs)
