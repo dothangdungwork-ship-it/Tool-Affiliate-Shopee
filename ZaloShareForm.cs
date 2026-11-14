@@ -265,26 +265,42 @@ internal sealed class ZaloShareForm : Form
       const visible = e => {
         const r = e.getBoundingClientRect();
         const s = getComputedStyle(e);
-        return r.width > 0 && r.height > 0 && s.display !== 'none' &&
-          s.visibility !== 'hidden' && !e.disabled;
+        return r.width > 20 && r.height > 10 && s.display !== 'none' &&
+          s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled;
       };
-      const selectors = [
-        '[contenteditable="true"]', '[role="textbox"]', 'textarea',
-        'input[placeholder*="tin nhắn" i]', '[data-placeholder*="tin nhắn" i]'
-      ];
-      const candidates = [...new Set(selectors.flatMap(s => [...document.querySelectorAll(s)]))]
-        .filter(visible);
-      if (!candidates.length)
-        return {ok:false, message:'Không tìm thấy khung soạn tin trong trang/khung hiện tại.'};
-
-      const editor = candidates.sort((a,b) => {
+      const all = [...document.querySelectorAll(
+        '[contenteditable], [role="textbox"], textarea, input, [data-placeholder], [aria-label]'
+      )];
+      const active = document.activeElement;
+      const isEditor = e => {
+        if (!e || !visible(e)) return false;
+        const tag = e.tagName?.toLowerCase();
+        const attrs = [
+          e.getAttribute('contenteditable'), e.getAttribute('role'),
+          e.getAttribute('data-placeholder'), e.getAttribute('aria-label'),
+          e.getAttribute('placeholder'), e.className?.toString()
+        ].join(' ').toLowerCase();
+        return e.isContentEditable || e.getAttribute('contenteditable') === 'true' ||
+          tag === 'textarea' || (tag === 'input' && !/checkbox|radio|button|hidden/.test(e.type)) ||
+          /textbox|tin nhắn|message|chat.?input|composer|editor/.test(attrs);
+      };
+      let candidates = all.filter(isEditor);
+      if (isEditor(active) && !candidates.includes(active)) candidates.unshift(active);
+      candidates = [...new Set(candidates)].sort((a,b) => {
         const ar=a.getBoundingClientRect(), br=b.getBoundingClientRect();
-        return (br.bottom-br.top) - (ar.bottom-ar.top);
-      })[0];
-      editor.focus();
+        const score = r => r.bottom * 2 + r.width + (r.height > 20 ? 100 : 0);
+        return score(br)-score(ar);
+      });
+      const editor = candidates[0];
+      if (!editor)
+        return {ok:false, message:'Chưa nhận diện được ô nhập tin nhắn. Hãy bấm chuột vào dòng “Nhập @, tin nhắn tới...” trong nhóm rồi thử lại.'};
 
+      editor.focus();
       if (editor.isContentEditable || editor.getAttribute('contenteditable') === 'true') {
-        editor.replaceChildren();
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        range.deleteContents();
         const lines = msg.split('\n');
         lines.forEach((line, i) => {
           if (i) editor.appendChild(document.createElement('br'));
@@ -300,29 +316,7 @@ internal sealed class ZaloShareForm : Form
         bubbles:true, inputType:'insertText', data:msg
       }));
       editor.dispatchEvent(new Event('change', {bubbles:true}));
-
-      const buttons = [...document.querySelectorAll('button,[role="button"],[aria-label],[title]')]
-        .filter(visible);
-      const sendButton = buttons.find(b => {
-        const label = [
-          b.innerText, b.getAttribute('aria-label'), b.getAttribute('title'),
-          b.getAttribute('data-tooltip')
-        ].filter(Boolean).join(' ').trim().toLowerCase();
-        return /^(gửi|send|gửi tin nhắn|send message)$/.test(label);
-      });
-
-      if (sendButton) {
-        sendButton.click();
-        return {ok:true, message:'Đã thao tác nút Gửi trong nhóm đang mở. Hãy kiểm tra tin nhắn trong cuộc trò chuyện.'};
-      }
-
-      editor.dispatchEvent(new KeyboardEvent('keydown', {
-        key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true, cancelable:true
-      }));
-      editor.dispatchEvent(new KeyboardEvent('keyup', {
-        key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true, cancelable:true
-      }));
-      return {ok:true, message:'Đã gửi lệnh Enter vào khung chat. Hãy kiểm tra cuộc trò chuyện để xác nhận tin đã được gửi.'};
+      return {ok:true, message:'Đã điền nội dung vào ô chat. Hãy kiểm tra nhóm và bấm gửi trong Zalo.'};
     })();
     """.Replace("__MESSAGE__", messageJson);
 }
