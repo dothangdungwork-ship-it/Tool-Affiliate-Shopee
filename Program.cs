@@ -236,14 +236,14 @@ public sealed class MainForm : Form
           for (const a of anchors) {
             let url;
             try { url = new URL(a.getAttribute('href'), location.href); } catch { continue; }
-            if (!/(^|\\.)shopee\\.vn$/i.test(url.hostname)) continue;
+            if (!/(^|\.)shopee\.vn$/i.test(url.hostname)) continue;
             const path = decodeURIComponent(url.pathname);
-            const productLike = /\\/product\\/\\d+\\/\\d+/i.test(path) || /-i\\.\\d+\\.\\d+/i.test(path);
+            const productLike = /\/product\/\d+\/\d+/i.test(path) || /-i\.\d+\.\d+/i.test(path);
             if (!productLike) continue;
             const href = url.origin + url.pathname;
             if (seen.has(href)) continue;
             const card = a.closest('[data-sqe="item"], [data-testid*="item"], li') || a.parentElement?.parentElement || a.parentElement;
-            const name = ((card?.innerText || a.innerText || a.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim()).slice(0, 240);
+            const name = ((card?.innerText || a.innerText || a.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim()).slice(0, 240);
             seen.add(href);
             found.push({ name: name || 'Sản phẩm Shopee', productUrl: href });
             if (found.length >= __LIMIT__) break;
