@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Web.WebView2.WinForms;
+using Microsoft.Web.WebView2.Core;
 
 namespace ShopeeAffiliateAgent;
 
@@ -46,6 +47,7 @@ public sealed class MainForm : Form
     private readonly BindingList<ProductItem> items = new();
     private readonly BindingSource source = new();
     private readonly WebView2 browser = new();
+    private readonly List<CoreWebView2Frame> loginFrames = new();
     private readonly TextBox keyword = new();
     private readonly Button loginButton = new();
     private readonly TextBox bulkProducts = new();
@@ -123,6 +125,16 @@ public sealed class MainForm : Form
                 Directory.CreateDirectory(temporaryBrowserProfile);
                 var env = await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(null, temporaryBrowserProfile);
                 await browser.EnsureCoreWebView2Async(env);
+                browser.CoreWebView2.FrameCreated += (_, args) =>
+                {
+                    try
+                    {
+                        var frame = args.Frame;
+                        loginFrames.Add(frame);
+                        frame.Destroyed += (_, _) => loginFrames.Remove(frame);
+                    }
+                    catch { }
+                };
                 browser.CoreWebView2.NavigationCompleted += async (_, e) =>
                 {
                     status.Text = e.IsSuccess ? "Trình duyệt sẵn sàng." : "Không tải được trang hiện tại.";
@@ -344,13 +356,8 @@ public sealed class MainForm : Form
                     return r.width > 0 && r.height > 0 && s.display !== 'none' &&
                       s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
                   };
-                  // Shopee có thể render form đăng nhập bên trong iframe.
-                  const roots = [document];
-                  for (const frame of [...document.querySelectorAll('iframe')]) {
-                    try { if (frame.contentDocument) roots.push(frame.contentDocument); } catch {}
-                  }
                   const all = (root, selector) => [...root.querySelectorAll(selector)];
-                  const fields = roots.flatMap(root => all(root, 'input:not([type=hidden])').filter(visible));
+                  const fields = all(document, 'input:not([type=hidden])').filter(visible);
                   const meta = e => ((e.placeholder || '') + ' ' + (e.getAttribute('aria-label') || '') + ' ' +
                     (e.name || '') + ' ' + (e.id || '') + ' ' + (e.autocomplete || '') + ' ' +
                     (e.parentElement?.innerText || '')).toLowerCase();
@@ -361,7 +368,7 @@ public sealed class MainForm : Form
                       return score(b)-score(a);
                     })[0];
                   if (!user || !pass) {
-                    const cta = roots.flatMap(root => all(root, 'a,button,[role=button]'))
+                    const cta = all(document, 'a,button,[role=button]')
                       .find(e => visible(e) && /tham gia ngay|đăng nhập|log in|login|join now|get started/i
                         .test((e.innerText || e.textContent || '').trim().toLowerCase()));
                     if (cta) {
@@ -397,13 +404,34 @@ public sealed class MainForm : Form
                 bool ok = false;
                 for (int attempt = 0; attempt < 3; attempt++)
                 {
-                    var raw = await browser.CoreWebView2.ExecuteScriptAsync(filledScript);
-                    using var result = JsonDocument.Parse(raw);
-                    var root = result.RootElement;
-                    ok = root.TryGetProperty("ok", out var okValue) && okValue.GetBoolean();
-                    message = root.TryGetProperty("message", out var msgValue) ? msgValue.GetString() ?? message : message;
-                    var retry = root.TryGetProperty("retry", out var retryValue) && retryValue.GetBoolean();
-                    if (ok || !retry) break;
+                    var candidates = new List<CoreWebView2Frame>();
+                    candidates.AddRange(loginFrames.ToArray());
+                    foreach (var frame in candidates)
+                    {
+                        try
+                        {
+                            var frameRaw = await frame.ExecuteScriptAsync(filledScript);
+                            using var frameResult = JsonDocument.Parse(frameRaw);
+                            var frameRoot = frameResult.RootElement;
+                            if (frameRoot.TryGetProperty("ok", out var frameOk) && frameOk.GetBoolean())
+                            {
+                                ok = true;
+                                message = frameRoot.TryGetProperty("message", out var frameMessage) ? frameMessage.GetString() ?? message : message;
+                                break;
+                            }
+                            if (frameRoot.TryGetProperty("message", out var frameError)) message = frameError.GetString() ?? message;
+                        }
+                        catch { /* frame may have navigated or been destroyed */ }
+                    }
+                    if (!ok)
+                    {
+                        var raw = await browser.CoreWebView2.ExecuteScriptAsync(filledScript);
+                        using var result = JsonDocument.Parse(raw);
+                        var root = result.RootElement;
+                        ok = root.TryGetProperty("ok", out var okValue) && okValue.GetBoolean();
+                        message = root.TryGetProperty("message", out var msgValue) ? msgValue.GetString() ?? message : message;
+                    }
+                    if (ok) break;
                     await Task.Delay(1800);
                 }
                 password.Clear();
