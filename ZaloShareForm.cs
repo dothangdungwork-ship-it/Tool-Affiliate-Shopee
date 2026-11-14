@@ -443,4 +443,363 @@ internal sealed class ZaloShareForm : Form
         }
 
         // Đợi Zalo lọc kết quả tìm kiếm rồi bấm vào nhóm khớp tên
-        for (int attempt =
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            await Task.Delay(550, token);
+            var clickAfterSearch = await ExecuteInMainAndFramesAsync(BuildClickConversationScript(nameJson));
+            if (clickAfterSearch is not null && IsSuccessResult(clickAfterSearch))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<(bool Ok, string Message)> SendMessageToCurrentOpenChatAsync()
+    {
+        var normalizedText = messageBox.Text.Replace("\r\n", "\n").Replace("\r", "\n").Trim();
+        try { Clipboard.SetText(normalizedText); } catch { }
+
+        var payload = JsonSerializer.Serialize(normalizedText);
+
+        zaloBrowser.Focus();
+        await Task.Delay(150);
+
+        var fillScript = BuildFillScript(payload);
+        var result = await ExecuteInMainAndFramesAsync(fillScript);
+        if (string.IsNullOrWhiteSpace(result) || result == "null")
+        {
+            return (false, "Không tìm thấy khung soạn tin. Hãy mở một nhóm Zalo trước.");
+        }
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        var ok = root.TryGetProperty("ok", out var okValue) && okValue.GetBoolean();
+        var message = root.TryGetProperty("message", out var messageValue)
+            ? messageValue.GetString() ?? "" : "Không xác định được kết quả.";
+
+        if (ok)
+        {
+            await Task.Delay(450);
+            var triggerResult = await ExecuteInMainAndFramesAsync(BuildTriggerSendScript());
+            if (!string.IsNullOrWhiteSpace(triggerResult) && triggerResult != "null")
+            {
+                try
+                {
+                    using var trigDoc = JsonDocument.Parse(triggerResult);
+                    if (trigDoc.RootElement.TryGetProperty("message", out var trigMsg) &&
+                        !string.IsNullOrWhiteSpace(trigMsg.GetString()))
+                    {
+                        message = trigMsg.GetString()!;
+                    }
+                }
+                catch { }
+            }
+        }
+
+        return (ok, message);
+    }
+
+    private async Task<string?> ExecuteInMainAndFramesAsync(string script)
+    {
+        var core = zaloBrowser.CoreWebView2;
+        if (core is null) return null;
+
+        string? lastErrorResult = null;
+
+        try
+        {
+            var result = await core.ExecuteScriptAsync(script);
+            if (IsSuccessResult(result)) return result;
+            if (!string.IsNullOrWhiteSpace(result) && result != "null" && result != "{}") lastErrorResult = result;
+        }
+        catch { }
+
+        foreach (var frame in frames.ToArray())
+        {
+            try
+            {
+                var result = await frame.ExecuteScriptAsync(script);
+                if (IsSuccessResult(result)) return result;
+                if (!string.IsNullOrWhiteSpace(result) && result != "null" && result != "{}") lastErrorResult = result;
+            }
+            catch { }
+        }
+        return lastErrorResult;
+    }
+
+    private static bool IsSuccessResult(string raw)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(raw) || raw == "null" || raw == "{}") return false;
+            using var doc = JsonDocument.Parse(raw);
+            return doc.RootElement.TryGetProperty("ok", out var value) && value.GetBoolean();
+        }
+        catch { return false; }
+    }
+
+    private static string BuildClickConversationScript(string groupNameJson) => """
+    (() => {
+      try {
+        const target = (__GROUP_NAME__ || '').toLowerCase().replace(/\s+/g, ' ').trim();
+        if (!target) return { ok: false, message: 'Tên nhóm trống.' };
+
+        const visible = e => {
+          if (!e) return false;
+          const r = e.getBoundingClientRect();
+          const s = getComputedStyle(e);
+          return r.width > 20 && r.height > 14 && r.left < 520 &&
+            s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
+        };
+
+        const allNodes = [...document.querySelectorAll('.conv-item, [id^="friend-item-"], .msg-item, [role="listitem"], div, span')].filter(visible);
+        let best = null;
+        let bestScore = 0;
+
+        for (const el of allNodes) {
+          if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) continue;
+          const rawText = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          if (!rawText || rawText.length > 180) continue;
+          const lower = rawText.toLowerCase();
+          const firstLine = (el.innerText || '').split('\n')[0].replace(/\s+/g, ' ').trim().toLowerCase();
+
+          let score = 0;
+          if (lower === target || firstLine === target) score = 300 - rawText.length;
+          else if (firstLine.includes(target)) score = 200 - firstLine.length;
+          else if (lower.includes(target) && rawText.length < target.length + 50) score = 100;
+
+          if (score > bestScore) {
+            bestScore = score;
+            best = el;
+          }
+        }
+
+        if (!best) return { ok: false, message: 'Chưa thấy nhóm trong danh sách.' };
+
+        const clickable = best.closest('.conv-item, [id^="friend-item-"], .msg-item, [role="listitem"], [tabindex]') || best;
+        clickable.scrollIntoView({ block: 'center' });
+        const rect = clickable.getBoundingClientRect();
+        const opts = { bubbles: true, cancelable: true, clientX: rect.left + 30, clientY: rect.top + 15 };
+        clickable.dispatchEvent(new MouseEvent('mousedown', opts));
+        clickable.dispatchEvent(new MouseEvent('mouseup', opts));
+        clickable.click();
+
+        return { ok: true, message: 'Đã chọn nhóm: ' + target };
+      } catch (e) {
+        return { ok: false, message: String(e) };
+      }
+    })();
+    """.Replace("__GROUP_NAME__", groupNameJson);
+
+    private static string BuildTypeSearchBoxScript(string groupNameJson) => """
+    (() => {
+      try {
+        const target = __GROUP_NAME__;
+        const searchInput = document.querySelector('#contact-search-input, input[placeholder*="Tìm kiếm"], input[placeholder*="Search"]');
+        if (!searchInput) return { ok: false, message: 'Không tìm thấy ô Tìm kiếm trên Zalo Web.' };
+
+        searchInput.focus();
+        searchInput.click();
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        if (setter) setter.call(searchInput, target);
+        else searchInput.value = target;
+
+        searchInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: target }));
+        searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+        return { ok: true, message: 'Đã nhập tên nhóm vào ô tìm kiếm.' };
+      } catch (e) {
+        return { ok: false, message: String(e) };
+      }
+    })();
+    """.Replace("__GROUP_NAME__", groupNameJson);
+
+    private static string BuildFillScript(string messageJson) => """
+    (() => {
+      try {
+        const msg = __MESSAGE__;
+        const visible = e => {
+          if (!e) return false;
+          const r = e.getBoundingClientRect();
+          const s = getComputedStyle(e);
+          return r.width > 20 && r.height > 10 && s.display !== 'none' &&
+            s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled;
+        };
+
+        const zaloSelectors = [
+          '#richInput',
+          '[id^="input_line_"]',
+          '.rich-input',
+          '[data-translate-placeholder*="Nhập @"]',
+          '[data-translate-placeholder*="tin nhắn"]',
+          '[contenteditable="true"]',
+          '[role="textbox"]',
+          'textarea'
+        ];
+
+        let candidates = [];
+        for (const sel of zaloSelectors) {
+          for (const el of document.querySelectorAll(sel)) {
+            if (visible(el) && !candidates.includes(el)) {
+              const idAndClass = ((el.id || '') + ' ' + (el.className || '') + ' ' + (el.getAttribute('placeholder') || '')).toLowerCase();
+              if (/contact-search|search-input|tìm kiếm/.test(idAndClass)) continue;
+              candidates.push(el);
+            }
+          }
+        }
+
+        candidates.sort((a, b) => {
+          const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+          const aId = (a.id || '').includes('richInput') || (a.id || '').includes('input_line') ? 1000 : 0;
+          const bId = (b.id || '').includes('richInput') || (b.id || '').includes('input_line') ? 1000 : 0;
+          return (bId + br.bottom * 2 + br.width) - (aId + ar.bottom * 2 + ar.width);
+        });
+
+        let editor = candidates[0];
+        if (!editor) {
+          return {
+            ok: false,
+            message: 'Chưa nhận diện được ô nhập tin nhắn. Hãy mở một cuộc trò chuyện trên Zalo Web rồi thử lại.'
+          };
+        }
+
+        if (editor.closest('[contenteditable="true"]')) {
+          editor = editor.closest('[contenteditable="true"]');
+        }
+
+        window.__zaloLastEditor = editor;
+        editor.click();
+        editor.focus();
+
+        if (editor.isContentEditable || editor.getAttribute('contenteditable') === 'true') {
+          const selection = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          document.execCommand('delete', false, null);
+
+          let pasted = false;
+          try {
+            const dt = new DataTransfer();
+            dt.setData('text/plain', msg);
+            const pasteEvent = new ClipboardEvent('paste', {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: dt
+            });
+            editor.dispatchEvent(pasteEvent);
+            pasted = (editor.innerText || '').includes('http') || (editor.innerText || '').trim().length >= msg.length / 2;
+          } catch {}
+
+          if (!pasted) {
+            try {
+              document.execCommand('paste');
+              pasted = (editor.innerText || '').includes('http') || (editor.innerText || '').trim().length >= msg.length / 2;
+            } catch {}
+          }
+
+          if (!pasted) {
+            const lines = msg.split('\n');
+            for (let i = 0; i < lines.length; i++) {
+              if (i > 0) {
+                const shiftEnter = new KeyboardEvent('keydown', {
+                  key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+                  shiftKey: true, bubbles: true, cancelable: true
+                });
+                editor.dispatchEvent(shiftEnter);
+                document.execCommand('insertLineBreak', false, null);
+              }
+              if (lines[i]) {
+                document.execCommand('insertText', false, lines[i]);
+              }
+            }
+          }
+
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+          const proto = editor.tagName === 'TEXTAREA'
+            ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(editor, msg); else editor.value = msg;
+          editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: msg }));
+          editor.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        return { ok: true, message: 'Đã tự động điền đầy đủ link và gửi vào nhóm Zalo thành công!' };
+      } catch (err) {
+        return { ok: false, message: 'Lỗi điền nội dung trên Zalo Web: ' + (err && err.message ? err.message : String(err)) };
+      }
+    })();
+    """.Replace("__MESSAGE__", messageJson);
+
+    private static string BuildTriggerSendScript() => """
+    (() => {
+      try {
+        const visible = e => {
+          if (!e) return false;
+          const r = e.getBoundingClientRect();
+          const s = getComputedStyle(e);
+          return r.width > 12 && r.height > 12 && s.display !== 'none' &&
+            s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled;
+        };
+
+        const editor = window.__zaloLastEditor || document.querySelector('#richInput, [contenteditable="true"]');
+
+        const sendSelectors = [
+          '[data-translate-title="STR_SEND"]',
+          '[title="Gửi tin nhắn"]',
+          '[title="Send message"]',
+          '.send-msg-btn',
+          '.fa-Sent-msg_24_Line'
+        ];
+
+        let sendBtn = null;
+        for (const sel of sendSelectors) {
+          const found = document.querySelector(sel);
+          if (found && visible(found)) {
+            sendBtn = found.closest('div[role="button"], button, .z--btn--v2') || found;
+            break;
+          }
+        }
+
+        if (!sendBtn) {
+          const allButtons = [...document.querySelectorAll('button, [role="button"], .z--btn--v2')].filter(visible);
+          sendBtn = allButtons.find(b => {
+            const meta = ((b.innerText || '') + ' ' + (b.title || '') + ' ' + (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-translate-title') || '')).toLowerCase();
+            return /str_send|gửi tin nhắn|send message|^gửi$|^send$/i.test(meta.trim());
+          });
+        }
+
+        if (sendBtn) {
+          sendBtn.click();
+          return { ok: true, message: 'Đã tự động điền đầy đủ link và gửi vào nhóm Zalo thành công!' };
+        }
+
+        if (editor) {
+          editor.focus();
+          const enterDown = new KeyboardEvent('keydown', {
+            key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+            bubbles: true, cancelable: true
+          });
+          const enterPress = new KeyboardEvent('keypress', {
+            key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+            bubbles: true, cancelable: true
+          });
+          const enterUp = new KeyboardEvent('keyup', {
+            key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+            bubbles: true, cancelable: true
+          });
+          editor.dispatchEvent(enterDown);
+          editor.dispatchEvent(enterPress);
+          editor.dispatchEvent(enterUp);
+        }
+
+        return { ok: true, message: 'Đã tự động điền đầy đủ link và gửi vào nhóm Zalo thành công!' };
+      } catch (err) {
+        return { ok: false, message: 'Đã điền tin nhắn nhưng lỗi kích hoạt nút Gửi: ' + (err && err.message ? err.message : String(err)) };
+      }
+    })();
+    """;
+}
