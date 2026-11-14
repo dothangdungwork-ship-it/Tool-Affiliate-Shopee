@@ -2,7 +2,7 @@
 
 Windows desktop helper for managing a Shopee Affiliate product-link queue without API access.
 
-## V3 features
+## V4 features
 
 - Embedded WebView2 opens Shopee and Shopee Affiliate so the user can sign in directly.
 - Search Shopee by keyword from the app.
