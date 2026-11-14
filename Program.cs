@@ -35,7 +35,9 @@ public sealed class ProductItem
     public string Name { get; set; } = "";
     public string ProductUrl { get; set; } = "";
     public string AffiliateUrl { get; set; } = "";
-    public string Status => string.IsNullOrWhiteSpace(AffiliateUrl) ? "Chờ tạo link" : "Đã có link";
+    public string AvailabilityStatus { get; set; } = "Chưa kiểm tra";
+    public string Status => string.IsNullOrWhiteSpace(AffiliateUrl) ? "Chờ tạo link" :
+        AvailabilityStatus == "Chưa kiểm tra" ? "Đã có link" : AvailabilityStatus;
 }
 
 public sealed class MainForm : Form
@@ -55,6 +57,8 @@ public sealed class MainForm : Form
     private bool loading;
     private bool agentRunning;
     private bool autoAgentAfterNavigation;
+    private bool showUnavailableOnly;
+    private bool availabilityCheckRunning;
     private const string CustomLinkUrl = "https://affiliate.shopee.vn/offer/custom_link";
 
     public MainForm()
@@ -157,7 +161,8 @@ public sealed class MainForm : Form
         AddButton(panel, "AI Agent: tự tạo link Affiliate", 12, 492, 578, () => RunAffiliateAgent());
 
         panel.Controls.Add(LabelAt("4. Danh sách sản phẩm (tối đa 100)", 534));
-        table.SetBounds(12, 561, 578, 264);
+        AddButton(panel, "Kiểm tra sản phẩm không thể mua", 12, 558, 578, CheckAvailabilityForAll);
+        table.SetBounds(12, 596, 578, 229);
         table.ReadOnly = true;
         table.AllowUserToAddRows = false;
         table.MultiSelect = false;
@@ -175,11 +180,13 @@ public sealed class MainForm : Form
         AddButton(panel, "Mở link gốc đã chọn", 12, 835, 185, OpenSelectedProduct);
         AddButton(panel, "Sao chép link Affiliate", 205, 835, 185, () => CopySelected(p => p.AffiliateUrl));
         AddButton(panel, "Xuất CSV", 398, 835, 192, ExportCsv);
+        AddButton(panel, "Chỉ hiện sản phẩm không thể mua", 12, 870, 280, ToggleUnavailableFilter);
+        AddButton(panel, "Xuất DS không thể mua", 302, 870, 288, ExportUnavailableCsv);
 
         var note = new Label
         {
             Text = "Sau khi lấy sản phẩm đang hiển thị, Agent tự mở Custom Link và lần lượt tạo link Affiliate trên giao diện Shopee. Cần đăng nhập trước; CAPTCHA/OTP sẽ yêu cầu bạn xử lý. Không đọc cookie, không gọi API nội bộ.",
-            Left = 12, Top = 875, Width = 578, Height = 58,
+            Left = 12, Top = 906, Width = 578, Height = 45,
             ForeColor = Color.DarkSlateGray
         };
         panel.Controls.Add(note);
@@ -533,6 +540,150 @@ public sealed class MainForm : Form
     {
         source.ResetBindings(false);
         table.Refresh();
+        ApplyUnavailableFilter();
+    }
+
+    private void ToggleUnavailableFilter()
+    {
+        showUnavailableOnly = !showUnavailableOnly;
+        ApplyUnavailableFilter();
+        foreach (Control control in Controls)
+        {
+            // Buttons live inside the left split panel; update the filter toggle label there.
+        }
+        var leftPanel = Controls.OfType<SplitContainer>().FirstOrDefault()?.Panel1;
+        var filterButton = leftPanel?.Controls.OfType<Button>().FirstOrDefault(b => b.Text.Contains("sản phẩm không thể mua"));
+        if (filterButton is not null)
+            filterButton.Text = showUnavailableOnly ? "Hiện tất cả sản phẩm" : "Chỉ hiện sản phẩm không thể mua";
+    }
+
+    private void ApplyUnavailableFilter()
+    {
+        foreach (DataGridViewRow row in table.Rows)
+        {
+            if (row.DataBoundItem is ProductItem item)
+                row.Visible = !showUnavailableOnly || IsUnavailable(item.AvailabilityStatus);
+        }
+    }
+
+    private static bool IsUnavailable(string value) =>
+        value.StartsWith("Không thể mua", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("Hết hàng", StringComparison.OrdinalIgnoreCase) ||
+        value.StartsWith("Ngừng bán", StringComparison.OrdinalIgnoreCase);
+
+    private async void CheckAvailabilityForAll()
+    {
+        if (availabilityCheckRunning || agentRunning) return;
+        if (browser.CoreWebView2 is null)
+        {
+            MessageBox.Show("Trình duyệt chưa sẵn sàng.");
+            return;
+        }
+        var targets = items.Where(p => !string.IsNullOrWhiteSpace(p.ProductUrl)).ToList();
+        if (targets.Count == 0) { MessageBox.Show("Danh sách chưa có sản phẩm."); return; }
+        var confirm = MessageBox.Show(
+            $"Agent sẽ mở lần lượt {targets.Count} link sản phẩm trên Shopee để kiểm tra còn mua được, hết hàng hay đã ngừng bán. Quá trình có thể mất vài phút. Tiếp tục?",
+            "Kiểm tra khả năng mua", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (confirm != DialogResult.Yes) return;
+
+        availabilityCheckRunning = true;
+        int checkedCount = 0, unavailable = 0, unknown = 0;
+        try
+        {
+            foreach (var product in targets)
+            {
+                status.Text = $"Đang kiểm tra {checkedCount + 1}/{targets.Count}: {product.Name}";
+                try
+                {
+                    await NavigateAndWaitAsync(product.ProductUrl, 25000);
+                    await Task.Delay(1300);
+                    const string inspectScript = """
+                    (() => {
+                      const text = (document.body?.innerText || '').toLowerCase().replace(/\\s+/g, ' ');
+                      const title = (document.title || '').toLowerCase();
+                      const has = terms => terms.some(t => text.includes(t) || title.includes(t));
+                      if (has(['sản phẩm không tồn tại','không tìm thấy sản phẩm','sản phẩm này không tồn tại','sản phẩm đã bị xóa','sản phẩm đã bị ẩn','this product is unavailable','product not found','item not found','page not found']))
+                        return { status:'Không thể mua - Bị ẩn/xóa', detail:'Trang Shopee báo sản phẩm không tồn tại hoặc không khả dụng.' };
+                      if (has(['ngừng kinh doanh','ngừng bán','shop đã đóng cửa','shop is closed','temporarily unavailable','tạm ngừng bán']))
+                        return { status:'Ngừng bán', detail:'Trang Shopee có dấu hiệu sản phẩm/shop ngừng bán.' };
+                      if (has(['hết hàng','đã bán hết','sold out','out of stock','tạm hết hàng']))
+                        return { status:'Hết hàng', detail:'Trang Shopee hiển thị hết hàng.' };
+                      const buttons = [...document.querySelectorAll('button,[role=button]')].filter(e => {
+                        const r=e.getBoundingClientRect(); return r.width>0 && r.height>0;
+                      });
+                      const buy = buttons.some(e => /mua ngay|thêm vào giỏ|buy now|add to cart/i.test(e.innerText || e.getAttribute('aria-label') || '') && !e.disabled && e.getAttribute('aria-disabled')!=='true');
+                      const bodyReady = text.length > 250;
+                      if (buy) return { status:'Có thể mua', detail:'Tìm thấy nút mua/thêm giỏ đang hoạt động.' };
+                      if (!bodyReady || has(['đang tải','loading...','access denied','captcha','verify you are human']))
+                        return { status:'Không xác định - Lỗi tải', detail:'Trang chưa tải đủ hoặc Shopee yêu cầu xác minh.' };
+                      return { status:'Không xác định - Cần kiểm tra', detail:'Không đủ dấu hiệu chắc chắn để kết luận còn hàng hay không.' };
+                    })();
+                    """;
+                    var raw = await browser.CoreWebView2.ExecuteScriptAsync(inspectScript);
+                    using var doc = JsonDocument.Parse(raw);
+                    var root = doc.RootElement;
+                    product.AvailabilityStatus = root.TryGetProperty("status", out var st) ? st.GetString() ?? "Không xác định - Cần kiểm tra" : "Không xác định - Cần kiểm tra";
+                    if (IsUnavailable(product.AvailabilityStatus)) unavailable++;
+                    if (product.AvailabilityStatus.StartsWith("Không xác định", StringComparison.OrdinalIgnoreCase)) unknown++;
+                }
+                catch
+                {
+                    product.AvailabilityStatus = "Không xác định - Lỗi tải";
+                    unknown++;
+                }
+                checkedCount++;
+                RefreshTable();
+                SaveData();
+                await Task.Delay(500);
+            }
+            Navigate(CustomLinkUrl);
+            MessageBox.Show($"Đã kiểm tra {checkedCount}/{targets.Count} sản phẩm.\\nKhông thể mua (hết hàng/ngừng bán/ẩn-xóa): {unavailable}.\\nChưa xác định, cần kiểm tra lại: {unknown}.\\nDanh sách đã được lưu. Dùng nút lọc hoặc xuất danh sách không thể mua.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Không thể hoàn tất kiểm tra: " + ex.Message);
+        }
+        finally
+        {
+            availabilityCheckRunning = false;
+            UpdateStatus();
+        }
+    }
+
+    private async Task NavigateAndWaitAsync(string url, int timeoutMs)
+    {
+        var core = browser.CoreWebView2 ?? throw new InvalidOperationException("WebView2 chưa sẵn sàng.");
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? sender, Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs e)
+        {
+            core.NavigationCompleted -= Handler;
+            tcs.TrySetResult(e.IsSuccess);
+        }
+        core.NavigationCompleted += Handler;
+        core.Navigate(url);
+        var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
+        core.NavigationCompleted -= Handler;
+        if (completed != tcs.Task || !await tcs.Task)
+            throw new TimeoutException("Trang sản phẩm tải quá lâu hoặc bị chặn.");
+    }
+
+    private void ExportUnavailableCsv()
+    {
+        var matches = items.Where(p => IsUnavailable(p.AvailabilityStatus)).ToList();
+        if (matches.Count == 0)
+        {
+            MessageBox.Show("Chưa có sản phẩm nào được xác định là không thể mua. Hãy chạy kiểm tra trước.");
+            return;
+        }
+        using var dialog = new SaveFileDialog { Filter = "CSV UTF-8 (*.csv)|*.csv", FileName = "Shopee_San_Pham_Khong_The_Mua.csv" };
+        if (dialog.ShowDialog() != DialogResult.OK) return;
+        var csv = new StringBuilder();
+        csv.AppendLine("STT,Ten san pham,Product URL,Affiliate URL,Trang thai");
+        foreach (var p in matches)
+            csv.AppendLine(string.Join(",", new[] { CsvSafe(p.Number.ToString()), CsvSafe(p.Name),
+                CsvSafe(p.ProductUrl), CsvSafe(p.AffiliateUrl), CsvSafe(p.AvailabilityStatus) }));
+        File.WriteAllText(dialog.FileName, csv.ToString(), new UTF8Encoding(true));
+        MessageBox.Show($"Đã xuất {matches.Count} sản phẩm không thể mua.");
     }
 
     private void CopySelected(Func<ProductItem, string> selector)
@@ -602,7 +753,8 @@ public sealed class MainForm : Form
     private void UpdateStatus()
     {
         int done = items.Count(p => !string.IsNullOrWhiteSpace(p.AffiliateUrl));
-        status.Text = $"Danh sách: {items.Count}/{MaxProducts} sản phẩm | Đã có link: {done} | Còn chờ: {items.Count - done} | Tự lưu trên máy tính";
+        int unavailable = items.Count(p => IsUnavailable(p.AvailabilityStatus));
+        status.Text = $"Danh sách: {items.Count}/{MaxProducts} | Có link: {done} | Không thể mua: {unavailable} | Còn chờ: {items.Count - done}";
     }
 
     private static IEnumerable<string> SplitLines(string text) =>
