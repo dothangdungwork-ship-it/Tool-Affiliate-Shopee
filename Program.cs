@@ -380,7 +380,7 @@ public sealed class MainForm : Form
                 const string submitScript = """
                 (() => {
                   const visible = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
-                  const norm = s => (s || '').toLowerCase().replace(/\\s+/g, ' ').trim();
+                  const norm = s => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
                   const fields = [...document.querySelectorAll('textarea,input:not([type=hidden])')]
                     .filter(visible).filter(e => !e.disabled && !e.readOnly);
                   const scored = fields.map(e => {
@@ -422,7 +422,7 @@ public sealed class MainForm : Form
                     const string readResultScript = """
                     (() => {
                       const visible = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
-                      const normalize = s => (s || '').trim().replace(/[\\s<>"')\\],.]+$/g, '');
+                      const normalize = s => (s || '').trim().replace(/[\s<>"')\],.]+$/g, '');
                       const isShort = s => {
                         try {
                           const u = new URL(normalize(s));
@@ -439,8 +439,8 @@ public sealed class MainForm : Form
                         ...[...root.querySelectorAll('input,textarea')].map(e => e.value || e.getAttribute('value') || e.innerText || e.textContent || ''),
                         ...[...root.querySelectorAll('a[href]')].map(e => e.href || ''),
                         root.innerText || root.textContent || ''
-                      ].join('\\n');
-                      const urls = [...new Set((raw.match(/https?:\\/\\/[^\\s"'<>]+/gi) || []).map(normalize).filter(isShort))];
+                      ].join('\n');
+                      const urls = [...new Set((raw.match(/https?:\/\/[^\s"'<>]+/gi) || []).map(normalize).filter(isShort))];
                       if (urls.length !== 1) return { ok:false, affiliateUrl:'', message: urls.length > 1 ? 'Có nhiều link trong kết quả, cần kiểm tra thủ công.' : 'Đang chờ cửa sổ Link of Custom Link.' };
                       const close = [...root.querySelectorAll('button,[role=button],[aria-label],[title]')].find(e => {
                         const t = ((e.innerText || '') + ' ' + (e.getAttribute('aria-label') || '') + ' ' + (e.title || '')).toLowerCase();
