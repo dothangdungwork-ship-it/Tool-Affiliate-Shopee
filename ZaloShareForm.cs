@@ -1,16 +1,42 @@
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
 namespace ToolAffiliate;
 
+public sealed class AddlivetagConfig
+{
+    public string ApiKey { get; set; } = "";
+    public string AffiliateId { get; set; } = "";
+    public string SubId1 { get; set; } = "zalo";
+    public string SaleKeywords { get; set; } = "flash sale, giảm giá, deal 1k, tai nghe, gia dụng";
+    public int ProductsPerBatch { get; set; } = 5;
+    public int AutoCycleMinutes { get; set; } = 30;
+    public int MinDelaySeconds { get; set; } = 15;
+    public int MaxDelaySeconds { get; set; } = 30;
+    public string GroupsText { get; set; } = "";
+}
+
+public sealed class SaleDealItem
+{
+    public string ItemId { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string PriceText { get; set; } = "";
+    public string CommissionText { get; set; } = "";
+    public string ProductUrl { get; set; } = "";
+    public string AffiliateUrl { get; set; } = "";
+}
+
 public sealed partial class MainForm : Form
 {
     private void InitializeZaloMenu()
     {
         var menu = new MenuStrip();
-        var zaloMenu = new ToolStripMenuItem("Zalo");
-        var sendItem = new ToolStripMenuItem("Gửi tin nhắn vào Zalo (1 hoặc nhiều nhóm)");
+        var zaloMenu = new ToolStripMenuItem("Zalo & Auto Addlivetag");
+        var sendItem = new ToolStripMenuItem("Mở bảng Auto Addlivetag API & Gửi Zalo tự động");
         sendItem.Click += (_, _) => OpenZaloForSelectedProducts();
         zaloMenu.DropDownItems.Add(sendItem);
         menu.Items.Add(zaloMenu);
@@ -47,15 +73,15 @@ public sealed partial class MainForm : Form
         string initialMessage = "";
         if (selected.Count > 0)
         {
-            var lines = new List<string> { "Mình chia sẻ một số sản phẩm Shopee:" };
+            var lines = new List<string> { "🔥 Tổng hợp Deal Sale Shopee đang giảm giá sâu:" };
             foreach (var product in selected)
             {
                 lines.Add("");
                 lines.Add("• " + (string.IsNullOrWhiteSpace(product.Name) ? "Sản phẩm Shopee" : product.Name.Trim()));
-                lines.Add(product.AffiliateUrl.Trim());
+                lines.Add("👉 Mua ngay: " + product.AffiliateUrl.Trim());
             }
             lines.Add("");
-            lines.Add("Link sản phẩm tham khảo. Bạn xem thông tin và giá hiện tại trên Shopee nhé!");
+            lines.Add("Số lượng mã giảm giá có hạn, mọi người bấm vào link xem giá ưu đãi trên Shopee nhé!");
             initialMessage = string.Join(Environment.NewLine, lines);
         }
 
@@ -65,42 +91,110 @@ public sealed partial class MainForm : Form
 
 internal sealed class ZaloShareForm : Form
 {
+    private static readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(25) };
     private readonly WebView2 zaloBrowser = new();
+    private readonly TextBox apiKeyBox = new();
+    private readonly TextBox affIdBox = new();
+    private readonly TextBox subIdBox = new();
+    private readonly TextBox keywordsBox = new();
+    private readonly NumericUpDown batchCountInput = new();
+    private readonly NumericUpDown cycleMinutesInput = new();
     private readonly TextBox messageBox = new();
     private readonly TextBox groupsBox = new();
     private readonly NumericUpDown minDelayInput = new();
     private readonly NumericUpDown maxDelayInput = new();
     private readonly Label statusLabel = new();
     private readonly List<CoreWebView2Frame> frames = new();
+    private readonly HashSet<string> sentItemIds = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly string profilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "ToolAffiliate", "ZaloProfile");
-    private readonly string savedGroupsFile = Path.Combine(
+    private readonly string configFilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ToolAffiliate", "zalo-groups.txt");
+        "ToolAffiliate", "addlivetag-config.json");
+
     private bool initialized;
     private bool sending;
+    private bool autoPilotRunning;
     private CancellationTokenSource? sendCts;
+    private int keywordRotateIndex;
 
     public ZaloShareForm(string message)
     {
-        Text = "Tool Affiliate - Gửi tin nhắn Zalo (Hỗ trợ nhiều nhóm & chống Spam)";
-        Width = 1240;
-        Height = 860;
-        MinimumSize = new Size(960, 680);
+        Text = "Tool Affiliate - Auto Lấy Deal Sale (Addlivetag API) & Tự Động Chia Sẻ Zalo";
+        Width = 1280;
+        Height = 900;
+        MinimumSize = new Size(1020, 740);
         StartPosition = FormStartPosition.CenterParent;
 
-        var instructions = new Label
+        // Khung cấu hình Addlivetag API ở phía trên
+        var apiPanel = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 44,
-            Padding = new Padding(10, 7, 8, 4),
-            Text = "1) Đăng nhập Zalo nếu cần.  2) Nhập danh sách tên nhóm ở khung bên phải (mỗi dòng 1 nhóm) hoặc gửi lẻ vào nhóm đang mở.  3) Chỉnh thời gian nghỉ giữa các nhóm để tránh Zalo báo spam."
+            Height = 92,
+            Padding = new Padding(10, 6, 10, 6),
+            BackColor = Color.FromArgb(245, 248, 252)
         };
+
+        var lblKey = new Label { Text = "API Key (addlivetag.com):", Left = 10, Top = 10, Width = 155, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) };
+        apiKeyBox.SetBounds(165, 7, 290, 25);
+        apiKeyBox.PlaceholderText = "Dán X-API-Key lấy từ addlivetag.com...";
+
+        var lblAffId = new Label { Text = "Affiliate ID:", Left = 465, Top = 10, Width = 78, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) };
+        affIdBox.SetBounds(545, 7, 130, 25);
+        affIdBox.PlaceholderText = "VD: 1739201xxxx";
+
+        var lblSubId = new Label { Text = "SubID:", Left = 685, Top = 10, Width = 45 };
+        subIdBox.SetBounds(732, 7, 80, 25);
+        subIdBox.Text = "zalo";
+
+        var fetchNowBtn = new Button
+        {
+            Text = "Lấy Deal Sale & Tạo Link Ngay",
+            Left = 825,
+            Top = 5,
+            Width = 215,
+            Height = 29,
+            BackColor = Color.FromArgb(225, 240, 255)
+        };
+
+        var lblKw = new Label { Text = "Từ khóa săn Sale (xoay vòng):", Left = 10, Top = 42, Width = 180 };
+        keywordsBox.SetBounds(192, 39, 350, 25);
+        keywordsBox.PlaceholderText = "flash sale, deal 1k, gia dụng, tai nghe...";
+
+        var lblCount = new Label { Text = "Số SP/đợt:", Left = 552, Top = 42, Width = 68 };
+        batchCountInput.SetBounds(620, 39, 55, 25);
+        batchCountInput.Minimum = 1;
+        batchCountInput.Maximum = 20;
+        batchCountInput.Value = 5;
+
+        var lblCycle = new Label { Text = "Chu kỳ tự gửi lại (phút):", Left = 685, Top = 42, Width = 145 };
+        cycleMinutesInput.SetBounds(832, 39, 60, 25);
+        cycleMinutesInput.Minimum = 1;
+        cycleMinutesInput.Maximum = 1440;
+        cycleMinutesInput.Value = 30;
+
+        var hintLabel = new Label
+        {
+            Text = "💡 Nhập API Key Addlivetag -> Bấm 'BẬT AUTO' bên dưới: Phần mềm sẽ tự lấy sản phẩm sale, tự gắn link Affiliate và tự gửi vào các nhóm Zalo mà không cần bấm tay.",
+            Left = 10,
+            Top = 68,
+            Width = 1220,
+            Height = 20,
+            ForeColor = Color.DarkSlateGray
+        };
+
+        apiPanel.Controls.AddRange(new Control[]
+        {
+            lblKey, apiKeyBox, lblAffId, affIdBox, lblSubId, subIdBox, fetchNowBtn,
+            lblKw, keywordsBox, lblCount, batchCountInput, lblCycle, cycleMinutesInput, hintLabel
+        });
 
         zaloBrowser.Dock = DockStyle.Fill;
 
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 240, Padding = new Padding(10) };
+        // Khung phía dưới: Nội dung tin nhắn + Danh sách nhóm + Nút điều khiển
+        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 245, Padding = new Padding(10) };
 
         var splitBottom = new SplitContainer
         {
@@ -109,8 +203,7 @@ internal sealed class ZaloShareForm : Form
             SplitterWidth = 8
         };
 
-        // Khung bên trái: Nội dung tin nhắn
-        var msgLabel = new Label { Text = "Nội dung tin nhắn (có thể chỉnh sửa):", Dock = DockStyle.Top, Height = 22, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
+        var msgLabel = new Label { Text = "Nội dung tin nhắn (tự động cập nhật khi lấy Deal hoặc tự sửa):", Dock = DockStyle.Top, Height = 22, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
         messageBox.Multiline = true;
         messageBox.ScrollBars = ScrollBars.Vertical;
         messageBox.Dock = DockStyle.Fill;
@@ -119,26 +212,12 @@ internal sealed class ZaloShareForm : Form
         splitBottom.Panel1.Controls.Add(messageBox);
         splitBottom.Panel1.Controls.Add(msgLabel);
 
-        // Khung bên phải: Danh sách nhóm cần gửi
-        var grpLabel = new Label { Text = "Danh sách tên nhóm/người nhận (Mỗi dòng 1 tên chính xác):", Dock = DockStyle.Top, Height = 22, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
+        var grpLabel = new Label { Text = "Danh sách tên nhóm Zalo nhận tin (Mỗi dòng 1 nhóm):", Dock = DockStyle.Top, Height = 22, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
         groupsBox.Multiline = true;
         groupsBox.ScrollBars = ScrollBars.Vertical;
         groupsBox.Dock = DockStyle.Fill;
         groupsBox.Font = new Font("Segoe UI", 9);
-        groupsBox.PlaceholderText = "Ví dụ:\nBấm đũ shopee\nHội săn sale Shopee\nNhóm nghiện Shopee...";
-        if (File.Exists(savedGroupsFile))
-        {
-            try { groupsBox.Text = File.ReadAllText(savedGroupsFile); } catch { }
-        }
-        groupsBox.TextChanged += (_, _) =>
-        {
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(savedGroupsFile)!);
-                File.WriteAllText(savedGroupsFile, groupsBox.Text);
-            }
-            catch { }
-        };
+        groupsBox.PlaceholderText = "Ví dụ:\nBấm đũ shopee\nHội săn sale Shopee...";
         splitBottom.Panel2.Controls.Add(groupsBox);
         splitBottom.Panel2.Controls.Add(grpLabel);
 
@@ -151,46 +230,75 @@ internal sealed class ZaloShareForm : Form
             Padding = new Padding(0, 5, 0, 0)
         };
 
-        var sendCurrentBtn = new Button { Text = "Gửi vào nhóm ĐANG MỞ", Width = 185, Height = 32 };
-        var sendMultiBtn = new Button { Text = "GỬI TỰ ĐỘNG NHIỀU NHÓM", Width = 215, Height = 32, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
-        var stopBtn = new Button { Text = "Dừng gửi", Width = 95, Height = 32, Enabled = false };
-        var copyButton = new Button { Text = "Sao chép ND", Width = 110, Height = 32 };
+        var autoPilotBtn = new Button
+        {
+            Text = "🚀 BẬT AUTO: TỰ LẤY SALE & TỰ GỬI ZALO",
+            Width = 290,
+            Height = 32,
+            Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            BackColor = Color.FromArgb(212, 245, 220)
+        };
+        var sendMultiBtn = new Button { Text = "Gửi ngay vào DS nhóm", Width = 165, Height = 32 };
+        var sendCurrentBtn = new Button { Text = "Gửi nhóm đang mở", Width = 140, Height = 32 };
+        var stopBtn = new Button { Text = "Dừng", Width = 80, Height = 32, Enabled = false, BackColor = Color.FromArgb(255, 228, 228) };
 
-        var delayLabel1 = new Label { Text = "Nghỉ chống spam từ:", AutoSize = true, Margin = new Padding(10, 8, 2, 0) };
+        var delayLabel1 = new Label { Text = "Nghỉ giữa các nhóm:", AutoSize = true, Margin = new Padding(8, 8, 2, 0) };
         minDelayInput.Minimum = 5;
         minDelayInput.Maximum = 600;
         minDelayInput.Value = 15;
-        minDelayInput.Width = 55;
+        minDelayInput.Width = 52;
         minDelayInput.Margin = new Padding(2, 4, 2, 0);
 
-        var delayLabel2 = new Label { Text = "đến:", AutoSize = true, Margin = new Padding(4, 8, 2, 0) };
+        var delayLabel2 = new Label { Text = "đến:", AutoSize = true, Margin = new Padding(2, 8, 2, 0) };
         maxDelayInput.Minimum = 5;
         maxDelayInput.Maximum = 600;
         maxDelayInput.Value = 30;
-        maxDelayInput.Width = 55;
+        maxDelayInput.Width = 52;
         maxDelayInput.Margin = new Padding(2, 4, 2, 0);
 
-        var delayLabel3 = new Label { Text = "giây/nhóm", AutoSize = true, Margin = new Padding(2, 8, 0, 0) };
+        var delayLabel3 = new Label { Text = "giây", AutoSize = true, Margin = new Padding(2, 8, 0, 0) };
 
-        sendCurrentBtn.Click += async (_, _) => await ConfirmAndSendSingleAsync(sendCurrentBtn, sendMultiBtn);
-        sendMultiBtn.Click += async (_, _) => await ConfirmAndSendMultiGroupsAsync(sendCurrentBtn, sendMultiBtn, stopBtn);
+        LoadSavedConfig();
+
+        // Lưu tự động khi người dùng thay đổi cấu hình
+        EventHandler saveHandler = (_, _) => SaveConfig();
+        apiKeyBox.TextChanged += saveHandler;
+        affIdBox.TextChanged += saveHandler;
+        subIdBox.TextChanged += saveHandler;
+        keywordsBox.TextChanged += saveHandler;
+        groupsBox.TextChanged += saveHandler;
+        batchCountInput.ValueChanged += saveHandler;
+        cycleMinutesInput.ValueChanged += saveHandler;
+        minDelayInput.ValueChanged += saveHandler;
+        maxDelayInput.ValueChanged += saveHandler;
+
+        fetchNowBtn.Click += async (_, _) =>
+        {
+            fetchNowBtn.Enabled = false;
+            try
+            {
+                var (ok, msg) = await FetchAndBuildSaleMessageAsync(CancellationToken.None);
+                statusLabel.Text = msg;
+                if (!ok) MessageBox.Show(this, msg, "Addlivetag API", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                if (!IsDisposed) fetchNowBtn.Enabled = true;
+            }
+        };
+
+        autoPilotBtn.Click += async (_, _) => await StartFullAutoPilotAsync(autoPilotBtn, sendMultiBtn, sendCurrentBtn, stopBtn);
+        sendMultiBtn.Click += async (_, _) => await RunManualMultiGroupSendAsync(autoPilotBtn, sendMultiBtn, sendCurrentBtn, stopBtn);
+        sendCurrentBtn.Click += async (_, _) => await RunManualSingleSendAsync(autoPilotBtn, sendMultiBtn, sendCurrentBtn);
         stopBtn.Click += (_, _) =>
         {
             sendCts?.Cancel();
-            statusLabel.Text = "Đang yêu cầu dừng gửi...";
-        };
-        copyButton.Click += (_, _) =>
-        {
-            if (!string.IsNullOrEmpty(messageBox.Text))
-            {
-                Clipboard.SetText(messageBox.Text);
-                statusLabel.Text = "Đã sao chép nội dung.";
-            }
+            statusLabel.Text = "Đang dừng tiến trình tự động...";
         };
 
         actions.Controls.AddRange(new Control[]
         {
-            sendCurrentBtn, sendMultiBtn, stopBtn, copyButton,
+            autoPilotBtn, sendMultiBtn, sendCurrentBtn, stopBtn,
             delayLabel1, minDelayInput, delayLabel2, maxDelayInput, delayLabel3
         });
 
@@ -205,7 +313,7 @@ internal sealed class ZaloShareForm : Form
 
         Controls.Add(zaloBrowser);
         Controls.Add(bottom);
-        Controls.Add(instructions);
+        Controls.Add(apiPanel);
 
         Shown += async (_, _) =>
         {
@@ -219,9 +327,52 @@ internal sealed class ZaloShareForm : Form
         FormClosed += (_, _) =>
         {
             sendCts?.Cancel();
+            SaveConfig();
             try { zaloBrowser.CoreWebView2?.Stop(); } catch { }
             zaloBrowser.Dispose();
         };
+    }
+
+    private void LoadSavedConfig()
+    {
+        try
+        {
+            if (!File.Exists(configFilePath)) return;
+            var cfg = JsonSerializer.Deserialize<AddlivetagConfig>(File.ReadAllText(configFilePath));
+            if (cfg is null) return;
+            apiKeyBox.Text = cfg.ApiKey ?? "";
+            affIdBox.Text = cfg.AffiliateId ?? "";
+            subIdBox.Text = string.IsNullOrWhiteSpace(cfg.SubId1) ? "zalo" : cfg.SubId1;
+            keywordsBox.Text = string.IsNullOrWhiteSpace(cfg.SaleKeywords) ? "flash sale, giảm giá, gia dụng" : cfg.SaleKeywords;
+            batchCountInput.Value = Math.Clamp(cfg.ProductsPerBatch, 1, 20);
+            cycleMinutesInput.Value = Math.Clamp(cfg.AutoCycleMinutes, 1, 1440);
+            minDelayInput.Value = Math.Clamp(cfg.MinDelaySeconds, 5, 600);
+            maxDelayInput.Value = Math.Clamp(cfg.MaxDelaySeconds, 5, 600);
+            groupsBox.Text = cfg.GroupsText ?? "";
+        }
+        catch { }
+    }
+
+    private void SaveConfig()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(configFilePath)!);
+            var cfg = new AddlivetagConfig
+            {
+                ApiKey = apiKeyBox.Text.Trim(),
+                AffiliateId = affIdBox.Text.Trim(),
+                SubId1 = subIdBox.Text.Trim(),
+                SaleKeywords = keywordsBox.Text.Trim(),
+                ProductsPerBatch = (int)batchCountInput.Value,
+                AutoCycleMinutes = (int)cycleMinutesInput.Value,
+                MinDelaySeconds = (int)minDelayInput.Value,
+                MaxDelaySeconds = (int)maxDelayInput.Value,
+                GroupsText = groupsBox.Text
+            };
+            File.WriteAllText(configFilePath, JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { }
     }
 
     private async Task InitializeZaloAsync()
@@ -248,7 +399,7 @@ internal sealed class ZaloShareForm : Form
             zaloBrowser.CoreWebView2.NavigationCompleted += (_, args) =>
             {
                 statusLabel.Text = args.IsSuccess
-                    ? "Zalo Web đã sẵn sàng. Nhập danh sách nhóm bên phải để gửi hàng loạt hoặc mở 1 nhóm để gửi lẻ."
+                    ? "Zalo Web đã sẵn sàng. Nhập API Key Addlivetag + Danh sách nhóm rồi bấm 'BẬT AUTO' để chạy hoàn toàn tự động."
                     : "Không tải được Zalo Web. Kiểm tra kết nối Internet.";
             };
             zaloBrowser.CoreWebView2.Navigate("https://chat.zalo.me/");
@@ -256,101 +407,481 @@ internal sealed class ZaloShareForm : Form
         catch (Exception ex)
         {
             statusLabel.Text = "Không khởi tạo được Zalo Web: " + ex.Message;
-            MessageBox.Show(this, "Không thể mở Zalo Web.\n" + ex.Message,
-                "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 
-    private async Task ConfirmAndSendSingleAsync(Button singleBtn, Button multiBtn)
+    // =========================================================================
+    // LUỒNG AUTO-PILOT: TỰ LẤY SẢN PHẨM SALE ADDLIVETAG -> TỰ TẠO LINK -> TỰ GỬI ZALO
+    // =========================================================================
+    private async Task StartFullAutoPilotAsync(Button autoBtn, Button multiBtn, Button singleBtn, Button stopBtn)
     {
-        if (sending) return;
+        if (sending || autoPilotRunning) return;
         if (zaloBrowser.CoreWebView2 is null)
         {
-            statusLabel.Text = "Zalo Web chưa sẵn sàng.";
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(messageBox.Text))
-        {
-            MessageBox.Show(this, "Nội dung tin nhắn đang trống.", "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Zalo Web chưa sẵn sàng.", "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
+        var groups = GetTargetGroups();
+        if (groups.Count == 0 && string.IsNullOrWhiteSpace(apiKeyBox.Text))
+        {
+            MessageBox.Show(this,
+                "Để chạy Auto hoàn toàn:\n1) Hãy nhập API Key của Addlivetag ở thanh phía trên.\n2) Nhập danh sách nhóm Zalo ở ô bên phải (hoặc mở sẵn 1 nhóm Zalo nếu chỉ muốn gửi vào nhóm đang mở).",
+                "Hướng dẫn bật Auto", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        autoPilotRunning = true;
         sending = true;
-        singleBtn.Enabled = false;
+        autoBtn.Enabled = false;
         multiBtn.Enabled = false;
+        singleBtn.Enabled = false;
+        stopBtn.Enabled = true;
+
+        sendCts = new CancellationTokenSource();
+        var token = sendCts.Token;
+        int batchNumber = 0;
+
         try
         {
-            var (ok, message) = await SendMessageToCurrentOpenChatAsync();
-            statusLabel.Text = message;
-            MessageBox.Show(this, message, ok ? "Zalo" : "Chưa gửi được",
-                MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            while (!token.IsCancellationRequested)
+            {
+                batchNumber++;
+                statusLabel.Text = $"[Auto Đợt #{batchNumber}] Đang gọi API Addlivetag lấy sản phẩm sale mới...";
+
+                // 1. Nếu có API Key Addlivetag, tự động lấy sản phẩm sale mới và dựng nội dung tin nhắn
+                if (!string.IsNullOrWhiteSpace(apiKeyBox.Text))
+                {
+                    var (fetchedOk, fetchedMsg) = await FetchAndBuildSaleMessageAsync(token);
+                    statusLabel.Text = $"[Auto Đợt #{batchNumber}] {fetchedMsg}";
+                    if (!fetchedOk && string.IsNullOrWhiteSpace(messageBox.Text))
+                    {
+                        await WaitWithCountdownAsync(60, "Lỗi lấy API Addlivetag, sẽ thử lại sau", token);
+                        continue;
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(messageBox.Text))
+                {
+                    statusLabel.Text = "Nội dung tin nhắn trống. Hãy nhập API Key Addlivetag hoặc soạn sẵn nội dung.";
+                    break;
+                }
+
+                // 2. Tự động chia sẻ vào danh sách nhóm Zalo (hoặc nhóm đang mở nếu danh sách nhóm để trống)
+                groups = GetTargetGroups();
+                int minSec = (int)Math.Min(minDelayInput.Value, maxDelayInput.Value);
+                int maxSec = (int)Math.Max(minDelayInput.Value, maxDelayInput.Value);
+
+                if (groups.Count > 0)
+                {
+                    int sentCount = 0;
+                    for (int i = 0; i < groups.Count; i++)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var groupName = groups[i];
+                        statusLabel.Text = $"[Auto Đợt #{batchNumber} - Nhóm {i + 1}/{groups.Count}] Đang mở nhóm '{groupName}'...";
+
+                        if (await SelectGroupByNameAsync(groupName, token))
+                        {
+                            await Task.Delay(800, token);
+                            var (ok, _) = await SendMessageToCurrentOpenChatAsync();
+                            if (ok) sentCount++;
+                        }
+
+                        if (i < groups.Count - 1)
+                        {
+                            int delaySec = Random.Shared.Next(minSec, maxSec + 1);
+                            await WaitWithCountdownAsync(delaySec, $"[Auto Đợt #{batchNumber}] Đã gửi {sentCount}/{i + 1} nhóm. Nghỉ chống spam", token);
+                        }
+                    }
+                }
+                else
+                {
+                    statusLabel.Text = $"[Auto Đợt #{batchNumber}] Đang tự động gửi vào cuộc trò chuyện đang mở...";
+                    await SendMessageToCurrentOpenChatAsync();
+                }
+
+                // 3. Nghỉ theo chu kỳ phút trước khi tự động lấy đợt sản phẩm sale tiếp theo
+                int cycleSeconds = (int)cycleMinutesInput.Value * 60;
+                await WaitWithCountdownAsync(cycleSeconds, $"[Hoàn tất Đợt #{batchNumber}] Đang chờ đến đợt lấy sản phẩm sale tiếp theo", token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            statusLabel.Text = "Đã dừng chế độ Auto.";
         }
         catch (Exception ex)
         {
-            statusLabel.Text = "Lỗi khi gửi: " + ex.Message;
-            MessageBox.Show(this, statusLabel.Text, "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            statusLabel.Text = "Lỗi Auto: " + ex.Message;
+        }
+        finally
+        {
+            autoPilotRunning = false;
+            sending = false;
+            if (!IsDisposed)
+            {
+                autoBtn.Enabled = true;
+                multiBtn.Enabled = true;
+                singleBtn.Enabled = true;
+                stopBtn.Enabled = false;
+            }
+        }
+    }
+
+    private async Task WaitWithCountdownAsync(int seconds, string prefix, CancellationToken token)
+    {
+        for (int remain = seconds; remain > 0; remain--)
+        {
+            token.ThrowIfCancellationRequested();
+            if (remain >= 60)
+                statusLabel.Text = $"{prefix}: còn {remain / 60} phút {remain % 60} giây...";
+            else
+                statusLabel.Text = $"{prefix}: còn {remain} giây...";
+            await Task.Delay(1000, token);
+        }
+    }
+
+    // =========================================================================
+    // KẾT NỐI API ADDLIVETAG: LẤY SẢN PHẨM SALE & TẠO LINK AFFILIATE TỰ ĐỘNG
+    // =========================================================================
+    private async Task<(bool Ok, string Message)> FetchAndBuildSaleMessageAsync(CancellationToken token)
+    {
+        var apiKey = apiKeyBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return (false, "Vui lòng nhập API Key lấy từ addlivetag.com (mục API Key).");
+        }
+
+        var keywords = keywordsBox.Text
+            .Split(new[] { ',', ';', '\n' }, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+        if (keywords.Count == 0) keywords.Add("");
+
+        var currentKeyword = keywords[keywordRotateIndex % keywords.Count];
+        keywordRotateIndex++;
+
+        int needed = (int)batchCountInput.Value;
+        statusLabel.Text = $"Đang tìm sản phẩm sale trên Addlivetag API (Từ khóa: '{(string.IsNullOrEmpty(currentKeyword) ? "Tất cả" : currentKeyword)}')...";
+
+        var deals = await QueryAddlivetagDealsAsync(apiKey, currentKeyword, needed * 3, token);
+        if (deals.Count == 0 && !string.IsNullOrEmpty(currentKeyword))
+        {
+            // Fallback tìm kiếm toàn sàn nếu từ khóa cụ thể không trả về kết quả
+            deals = await QueryAddlivetagDealsAsync(apiKey, "", needed * 3, token);
+        }
+
+        if (deals.Count == 0)
+        {
+            return (false, "Không lấy được sản phẩm từ Addlivetag API. Hãy kiểm tra lại API Key hoặc hạn mức.");
+        }
+
+        // Ưu tiên chọn các sản phẩm chưa từng gửi trong phiên chạy này
+        var selectedDeals = deals
+            .Where(d => !string.IsNullOrWhiteSpace(d.ProductUrl) && (string.IsNullOrEmpty(d.ItemId) || !sentItemIds.Contains(d.ItemId)))
+            .Take(needed)
+            .ToList();
+
+        if (selectedDeals.Count == 0)
+        {
+            sentItemIds.Clear();
+            selectedDeals = deals.Where(d => !string.IsNullOrWhiteSpace(d.ProductUrl)).Take(needed).ToList();
+        }
+
+        foreach (var d in selectedDeals)
+        {
+            if (!string.IsNullOrEmpty(d.ItemId)) sentItemIds.Add(d.ItemId);
+        }
+
+        // Bước 2: Chuyển đổi sang link Affiliate của bạn qua API Addlivetag (hoặc an_redir)
+        statusLabel.Text = $"Đang tạo {selectedDeals.Count} link Affiliate qua Addlivetag...";
+        await PopulateAffiliateLinksAsync(apiKey, selectedDeals, token);
+
+        // Bước 3: Dựng nội dung tin nhắn hấp dẫn để chia sẻ
+        var lines = new List<string>
+        {
+            string.IsNullOrWhiteSpace(currentKeyword)
+                ? "🔥 TỔNG HỢP DEAL SALE SHOPEE ĐANG GIẢM SÂU:"
+                : $"🔥 SĂN DEAL SALE SHOPEE ({currentKeyword.ToUpperInvariant()}):"
+        };
+
+        foreach (var deal in selectedDeals)
+        {
+            lines.Add("");
+            var pricePart = !string.IsNullOrWhiteSpace(deal.PriceText) ? $" — 💰 Giá chỉ: {deal.PriceText}" : "";
+            lines.Add($"• {deal.Name}{pricePart}");
+            lines.Add($"👉 Mua ngay: {(string.IsNullOrWhiteSpace(deal.AffiliateUrl) ? deal.ProductUrl : deal.AffiliateUrl)}");
+        }
+
+        lines.Add("");
+        lines.Add("⚡ Vào link áp thêm mã giảm giá trên Shopee trước khi hết lượt nhé!");
+
+        messageBox.Text = string.Join(Environment.NewLine, lines);
+        return (true, $"Đã tự động lấy {selectedDeals.Count} sản phẩm sale & tạo link Affiliate thành công!");
+    }
+
+    private async Task<List<SaleDealItem>> QueryAddlivetagDealsAsync(string apiKey, string keyword, int limit, CancellationToken token)
+    {
+        var results = new List<SaleDealItem>();
+        var encodedKw = Uri.EscapeDataString(keyword ?? "");
+        var encodedKey = Uri.EscapeDataString(apiKey);
+
+        // Thử lần lượt Product Offer API và Market Search API của data.addlivetag.com
+        var candidateUrls = new[]
+        {
+            $"https://data.addlivetag.com/offers/product-offer.php?keyword={encodedKw}&page=1&limit={limit}&key={encodedKey}",
+            $"https://data.addlivetag.com/search/market.php?q={encodedKw}&page=1&limit={limit}&key={encodedKey}",
+            $"https://data.addlivetag.com/offers/shopee-offer.php?page=1&limit={limit}&key={encodedKey}"
+        };
+
+        foreach (var endpoint in candidateUrls)
+        {
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, endpoint);
+                req.Headers.Add("X-API-Key", apiKey);
+                req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+                using var resp = await http.SendAsync(req, token);
+                if (!resp.IsSuccessStatusCode) continue;
+
+                var json = await resp.Content.ReadAsStringAsync(token);
+                using var doc = JsonDocument.Parse(json);
+                ExtractDealsFromJson(doc.RootElement, results);
+
+                if (results.Count > 0) break;
+            }
+            catch { }
+        }
+
+        return results;
+    }
+
+    private static void ExtractDealsFromJson(JsonElement root, List<SaleDealItem> collector)
+    {
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            // Kiểm tra nếu object hiện tại là 1 sản phẩm
+            string name = GetFirstString(root, "productName", "item_name", "name", "title", "offerName");
+            string link = GetFirstString(root, "productLink", "originalLink", "item_url", "url", "offerLink", "link");
+            string itemId = GetFirstString(root, "itemId", "item_id", "id");
+            string shopId = GetFirstString(root, "shopId", "shop_id");
+
+            if (string.IsNullOrWhiteSpace(link) && !string.IsNullOrWhiteSpace(shopId) && !string.IsNullOrWhiteSpace(itemId))
+            {
+                link = $"https://shopee.vn/product/{shopId}/{itemId}";
+            }
+
+            if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(link) && link.Contains("shopee", StringComparison.OrdinalIgnoreCase))
+            {
+                string price = FormatVndPrice(GetFirstString(root, "price", "salePrice", "priceMin", "discountPrice"));
+                string comm = FormatVndPrice(GetFirstString(root, "commission", "sellerComFinal", "shopeeComFinal"));
+                string existingAff = GetFirstString(root, "affLink", "short_link", "shortLink", "offerLink");
+
+                collector.Add(new SaleDealItem
+                {
+                    ItemId = itemId,
+                    Name = name,
+                    PriceText = price,
+                    CommissionText = comm,
+                    ProductUrl = CleanShopeeProductUrl(link),
+                    AffiliateUrl = existingAff.StartsWith("https://s.shopee.vn", StringComparison.OrdinalIgnoreCase) ? existingAff : ""
+                });
+                return;
+            }
+
+            foreach (var prop in root.EnumerateObject())
+            {
+                if (prop.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object)
+                {
+                    ExtractDealsFromJson(prop.Value, collector);
+                }
+            }
+        }
+        else if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in root.EnumerateArray())
+            {
+                ExtractDealsFromJson(item, collector);
+            }
+        }
+    }
+
+    private async Task PopulateAffiliateLinksAsync(string apiKey, List<SaleDealItem> deals, CancellationToken token)
+    {
+        var affId = affIdBox.Text.Trim();
+        var sub1 = CleanSubId(subIdBox.Text.Trim());
+        if (string.IsNullOrEmpty(sub1)) sub1 = "zalo";
+
+        // Chia từng cụm tối đa 5 link để gọi API tạo shortlink chính chủ: https://addlivetag.com/api/v1/shopee-link.php
+        for (int i = 0; i < deals.Count; i += 5)
+        {
+            var chunk = deals.Skip(i).Take(5).ToList();
+            try
+            {
+                var payloadObj = new Dictionary<string, object>
+                {
+                    ["urls"] = chunk.Select(x => x.ProductUrl).ToArray(),
+                    ["sub1"] = sub1
+                };
+                if (!string.IsNullOrWhiteSpace(affId)) payloadObj["aff_id"] = affId;
+
+                using var req = new HttpRequestMessage(HttpMethod.Post, "https://addlivetag.com/api/v1/shopee-link.php");
+                req.Headers.Add("X-API-Key", apiKey);
+                req.Content = new StringContent(JsonSerializer.Serialize(payloadObj), Encoding.UTF8, "application/json");
+
+                using var resp = await http.SendAsync(req, token);
+                if (resp.IsSuccessStatusCode)
+                {
+                    var raw = await resp.Content.ReadAsStringAsync(token);
+                    using var doc = JsonDocument.Parse(raw);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("ok", out var okProp) && okProp.GetBoolean() &&
+                        root.TryGetProperty("data", out var dataArr) && dataArr.ValueKind == JsonValueKind.Array)
+                    {
+                        int idx = 0;
+                        foreach (var el in dataArr.EnumerateArray())
+                        {
+                            if (idx < chunk.Count && el.TryGetProperty("ok", out var itemOk) && itemOk.GetBoolean())
+                            {
+                                var shortLink = GetFirstString(el, "short_link", "shortLink");
+                                if (!string.IsNullOrWhiteSpace(shortLink))
+                                    chunk[idx].AffiliateUrl = shortLink;
+                            }
+                            idx++;
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        // Dự phòng: Nếu link nào chưa có short_link (do chưa gắn cookie trên web addlivetag),
+        // tự động build link chuẩn Shopee 2026 (an_redir) từ Affiliate ID của người dùng
+        foreach (var deal in deals)
+        {
+            if (string.IsNullOrWhiteSpace(deal.AffiliateUrl))
+            {
+                if (!string.IsNullOrWhiteSpace(affId))
+                {
+                    var cleanOrigin = CleanShopeeProductUrl(deal.ProductUrl);
+                    deal.AffiliateUrl = $"https://s.shopee.vn/an_redir?origin_link={Uri.EscapeDataString(cleanOrigin)}&affiliate_id={Uri.EscapeDataString(affId)}&sub_id={sub1}-autodeal";
+                }
+                else
+                {
+                    deal.AffiliateUrl = deal.ProductUrl;
+                }
+            }
+        }
+    }
+
+    private static string CleanShopeeProductUrl(string url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return $"{uri.Scheme}://{uri.Host}{uri.AbsolutePath}";
+        }
+        return url;
+    }
+
+    private static string CleanSubId(string raw)
+    {
+        var sb = new StringBuilder();
+        foreach (char c in raw)
+        {
+            if (char.IsLetterOrDigit(c)) sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private static string GetFirstString(JsonElement obj, params string[] keys)
+    {
+        foreach (var k in keys)
+        {
+            if (obj.TryGetProperty(k, out var val))
+            {
+                if (val.ValueKind == JsonValueKind.String) return val.GetString() ?? "";
+                if (val.ValueKind == JsonValueKind.Number) return val.GetRawText();
+            }
+        }
+        return "";
+    }
+
+    private static string FormatVndPrice(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        if (decimal.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var num))
+        {
+            if (num > 100000000) num /= 100000; // Phòng trường hợp giá Shopee nhân 100000
+            return string.Format(System.Globalization.CultureInfo.GetCultureInfo("vi-VN"), "{0:N0}đ", num);
+        }
+        return raw;
+    }
+
+    private List<string> GetTargetGroups() =>
+        groupsBox.Text
+            .Replace("\r", "")
+            .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    // =========================================================================
+    // GỬI TỰ ĐỘNG KHÔNG CẦN XÁC NHẬN POPUP
+    // =========================================================================
+    private async Task RunManualSingleSendAsync(Button autoBtn, Button multiBtn, Button singleBtn)
+    {
+        if (sending) return;
+        if (zaloBrowser.CoreWebView2 is null || string.IsNullOrWhiteSpace(messageBox.Text)) return;
+
+        sending = true;
+        autoBtn.Enabled = false;
+        multiBtn.Enabled = false;
+        singleBtn.Enabled = false;
+        try
+        {
+            var (_, message) = await SendMessageToCurrentOpenChatAsync();
+            statusLabel.Text = message;
         }
         finally
         {
             sending = false;
             if (!IsDisposed)
             {
-                singleBtn.Enabled = true;
+                autoBtn.Enabled = true;
                 multiBtn.Enabled = true;
+                singleBtn.Enabled = true;
             }
         }
     }
 
-    private async Task ConfirmAndSendMultiGroupsAsync(Button singleBtn, Button multiBtn, Button stopBtn)
+    private async Task RunManualMultiGroupSendAsync(Button autoBtn, Button multiBtn, Button singleBtn, Button stopBtn)
     {
         if (sending) return;
-        if (zaloBrowser.CoreWebView2 is null)
-        {
-            statusLabel.Text = "Zalo Web chưa sẵn sàng.";
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(messageBox.Text))
-        {
-            MessageBox.Show(this, "Nội dung tin nhắn đang trống.", "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        var groups = groupsBox.Text
-            .Replace("\r", "")
-            .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
+        var groups = GetTargetGroups();
         if (groups.Count == 0)
         {
-            MessageBox.Show(this,
-                "Bạn chưa nhập tên nhóm nào ở ô 'Danh sách tên nhóm/người nhận' phía bên phải.\n\nHãy nhập mỗi dòng 1 tên nhóm (ví dụ: Bấm đũ shopee) rồi thử lại.",
-                "Chưa có danh sách nhóm", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            groupsBox.Focus();
+            MessageBox.Show(this, "Hãy nhập danh sách tên nhóm ở ô bên phải (mỗi dòng 1 nhóm).", "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        int minSec = (int)Math.Min(minDelayInput.Value, maxDelayInput.Value);
-        int maxSec = (int)Math.Max(minDelayInput.Value, maxDelayInput.Value);
+        // Nếu ô tin nhắn đang trống mà có API Key, tự động lấy sản phẩm sale trước khi gửi
+        if (string.IsNullOrWhiteSpace(messageBox.Text) && !string.IsNullOrWhiteSpace(apiKeyBox.Text))
+        {
+            await FetchAndBuildSaleMessageAsync(CancellationToken.None);
+        }
 
-        var confirm = MessageBox.Show(this,
-            $"Phần mềm sẽ lần lượt tìm và gửi tin nhắn vào {groups.Count} nhóm:\n" +
-            $"- {string.Join("\n- ", groups.Take(6))}{(groups.Count > 6 ? "\n- ..." : "")}\n\n" +
-            $"Thời gian nghỉ ngẫu nhiên giữa các nhóm: {minSec} - {maxSec} giây để tránh Zalo báo spam.\n\n" +
-            "Bắt đầu gửi tự động ngay bây giờ?",
-            "Xác nhận gửi nhiều nhóm Zalo", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-
-        if (confirm != DialogResult.Yes) return;
+        if (string.IsNullOrWhiteSpace(messageBox.Text)) return;
 
         sending = true;
-        singleBtn.Enabled = false;
+        autoBtn.Enabled = false;
         multiBtn.Enabled = false;
+        singleBtn.Enabled = false;
         stopBtn.Enabled = true;
         sendCts = new CancellationTokenSource();
         var token = sendCts.Token;
 
+        int minSec = (int)Math.Min(minDelayInput.Value, maxDelayInput.Value);
+        int maxSec = (int)Math.Max(minDelayInput.Value, maxDelayInput.Value);
         int successCount = 0;
-        var failedGroups = new List<string>();
 
         try
         {
@@ -358,67 +889,35 @@ internal sealed class ZaloShareForm : Form
             {
                 token.ThrowIfCancellationRequested();
                 var groupName = groups[i];
-                statusLabel.Text = $"[{i + 1}/{groups.Count}] Đang tìm và mở nhóm: {groupName}...";
+                statusLabel.Text = $"[{i + 1}/{groups.Count}] Đang mở nhóm: {groupName}...";
 
-                bool opened = await SelectGroupByNameAsync(groupName, token);
-                if (!opened)
-                {
-                    failedGroups.Add($"{groupName} (Không tìm thấy nhóm)");
-                }
-                else
+                if (await SelectGroupByNameAsync(groupName, token))
                 {
                     await Task.Delay(750, token);
-                    statusLabel.Text = $"[{i + 1}/{groups.Count}] Đang gửi tin nhắn vào nhóm: {groupName}...";
-                    var (ok, msg) = await SendMessageToCurrentOpenChatAsync();
-                    if (ok)
-                    {
-                        successCount++;
-                        statusLabel.Text = $"[{i + 1}/{groups.Count}] Đã gửi thành công vào '{groupName}'!";
-                    }
-                    else
-                    {
-                        failedGroups.Add($"{groupName} ({msg})");
-                    }
+                    var (ok, _) = await SendMessageToCurrentOpenChatAsync();
+                    if (ok) successCount++;
                 }
 
-                // Nếu chưa phải nhóm cuối cùng, thực hiện đếm ngược nghỉ chống spam
                 if (i < groups.Count - 1)
                 {
                     int waitSeconds = Random.Shared.Next(minSec, maxSec + 1);
-                    for (int remain = waitSeconds; remain > 0; remain--)
-                    {
-                        token.ThrowIfCancellationRequested();
-                        statusLabel.Text = $"Đã gửi {successCount}/{i + 1} nhóm. Đang nghỉ chống spam {remain} giây trước khi gửi nhóm tiếp theo ({groups[i + 1]})...";
-                        await Task.Delay(1000, token);
-                    }
+                    await WaitWithCountdownAsync(waitSeconds, $"Đã gửi {successCount}/{i + 1} nhóm. Nghỉ chống spam", token);
                 }
             }
-
-            var summary = $"Hoàn tất gửi hàng loạt!\n- Thành công: {successCount}/{groups.Count} nhóm.";
-            if (failedGroups.Count > 0)
-            {
-                summary += "\n- Chưa gửi được:\n  • " + string.Join("\n  • ", failedGroups);
-            }
-            statusLabel.Text = $"Hoàn tất: Đã gửi {successCount}/{groups.Count} nhóm.";
-            MessageBox.Show(this, summary, "Kết quả gửi nhiều nhóm Zalo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            statusLabel.Text = $"Hoàn tất: Đã tự động gửi vào {successCount}/{groups.Count} nhóm Zalo!";
         }
         catch (OperationCanceledException)
         {
-            statusLabel.Text = $"Đã dừng gửi theo yêu cầu. (Đã gửi {successCount}/{groups.Count} nhóm)";
-            MessageBox.Show(this, statusLabel.Text, "Đã dừng", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        catch (Exception ex)
-        {
-            statusLabel.Text = "Lỗi khi gửi nhiều nhóm: " + ex.Message;
-            MessageBox.Show(this, statusLabel.Text, "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            statusLabel.Text = $"Đã dừng gửi. (Đã gửi {successCount}/{groups.Count} nhóm)";
         }
         finally
         {
             sending = false;
             if (!IsDisposed)
             {
-                singleBtn.Enabled = true;
+                autoBtn.Enabled = true;
                 multiBtn.Enabled = true;
+                singleBtn.Enabled = true;
                 stopBtn.Enabled = false;
             }
         }
@@ -428,29 +927,20 @@ internal sealed class ZaloShareForm : Form
     {
         var nameJson = JsonSerializer.Serialize(groupName.Trim());
 
-        // Bước 1: Tìm trực tiếp trong danh sách hội thoại đang hiển thị bên trái
         var clickDirectResult = await ExecuteInMainAndFramesAsync(BuildClickConversationScript(nameJson));
         if (clickDirectResult is not null && IsSuccessResult(clickDirectResult))
-        {
             return true;
-        }
 
-        // Bước 2: Nếu nhóm bị trôi xuống dưới, gõ tên nhóm vào ô Tìm kiếm (#contact-search-input) của Zalo
         var searchResult = await ExecuteInMainAndFramesAsync(BuildTypeSearchBoxScript(nameJson));
         if (searchResult is null || !IsSuccessResult(searchResult))
-        {
             return false;
-        }
 
-        // Đợi Zalo lọc kết quả tìm kiếm rồi bấm vào nhóm khớp tên
         for (int attempt = 0; attempt < 5; attempt++)
         {
             await Task.Delay(550, token);
             var clickAfterSearch = await ExecuteInMainAndFramesAsync(BuildClickConversationScript(nameJson));
             if (clickAfterSearch is not null && IsSuccessResult(clickAfterSearch))
-            {
                 return true;
-            }
         }
 
         return false;
@@ -470,7 +960,7 @@ internal sealed class ZaloShareForm : Form
         var result = await ExecuteInMainAndFramesAsync(fillScript);
         if (string.IsNullOrWhiteSpace(result) || result == "null")
         {
-            return (false, "Không tìm thấy khung soạn tin. Hãy mở một nhóm Zalo trước.");
+            return (false, "Không tìm thấy khung soạn tin Zalo.");
         }
 
         using var document = JsonDocument.Parse(result);
@@ -660,7 +1150,7 @@ internal sealed class ZaloShareForm : Form
         if (!editor) {
           return {
             ok: false,
-            message: 'Chưa nhận diện được ô nhập tin nhắn. Hãy mở một cuộc trò chuyện trên Zalo Web rồi thử lại.'
+            message: 'Chưa nhận diện được ô nhập tin nhắn. Hãy mở một cuộc trò chuyện trên Zalo Web.'
           };
         }
 
@@ -727,7 +1217,7 @@ internal sealed class ZaloShareForm : Form
           editor.dispatchEvent(new Event('change', { bubbles: true }));
         }
 
-        return { ok: true, message: 'Đã tự động điền đầy đủ link và gửi vào nhóm Zalo thành công!' };
+        return { ok: true, message: 'Đã tự động điền và gửi tin nhắn vào nhóm Zalo thành công!' };
       } catch (err) {
         return { ok: false, message: 'Lỗi điền nội dung trên Zalo Web: ' + (err && err.message ? err.message : String(err)) };
       }
