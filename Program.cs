@@ -22,6 +22,13 @@ public sealed class VisibleProduct
     public string ProductUrl { get; set; } = "";
 }
 
+public sealed class AgentLinkResult
+{
+    public bool Ok { get; set; }
+    public string AffiliateUrl { get; set; } = "";
+    public string Message { get; set; } = "";
+}
+
 public sealed class ProductItem
 {
     public int Number { get; set; }
@@ -46,6 +53,7 @@ public sealed class MainForm : Form
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "ShopeeAffiliateAgent", "products-v3.json");
     private bool loading;
+    private bool agentRunning;
 
     public MainForm()
     {
@@ -135,9 +143,10 @@ public sealed class MainForm : Form
         bulkAffiliates.PlaceholderText = "Dán các link Affiliate Shopee do Custom Link chính thức trả về, mỗi dòng một link...";
         panel.Controls.Add(bulkAffiliates);
         AddButton(panel, "Gắn link lần lượt cho sản phẩm đang chờ", 12, 456, 578, AttachBulkAffiliates);
+        AddButton(panel, "AI Agent: tự tạo link Affiliate", 12, 492, 578, RunAffiliateAgent);
 
-        panel.Controls.Add(LabelAt("4. Danh sách sản phẩm (tối đa 100)", 498));
-        table.SetBounds(12, 525, 578, 300);
+        panel.Controls.Add(LabelAt("4. Danh sách sản phẩm (tối đa 100)", 534));
+        table.SetBounds(12, 561, 578, 264);
         table.ReadOnly = true;
         table.AllowUserToAddRows = false;
         table.MultiSelect = false;
@@ -158,7 +167,7 @@ public sealed class MainForm : Form
 
         var note = new Label
         {
-            Text = "V4: tự đọc tên và URL sản phẩm từ kết quả tìm kiếm đang hiển thị trong Shopee, loại trùng và lưu cục bộ. Chức năng tạo link Affiliate tự động qua giao diện Custom Link đang được phát triển; hiện vẫn cần tạo link trên trang chính thức và dán kết quả vào đây. Ứng dụng không đọc/xuất cookie hoặc gọi API nội bộ.",
+            Text = "Agent hỗ trợ thao tác Custom Link trên giao diện Shopee đang mở. Bạn cần đăng nhập và mở đúng trang Custom Link trước khi chạy. Nếu giao diện thay đổi hoặc Shopee yêu cầu CAPTCHA/OTP, Agent sẽ dừng để bạn xử lý. Không đọc cookie, không gọi API nội bộ.",
             Left = 12, Top = 875, Width = 578, Height = 58,
             ForeColor = Color.DarkSlateGray
         };
@@ -307,6 +316,123 @@ public sealed class MainForm : Form
         SaveData();
         UpdateStatus();
         MessageBox.Show($"Đã thêm {added} sản phẩm. Bỏ qua {skipped} dòng không hợp lệ, trùng hoặc vượt giới hạn 100.");
+    }
+
+    private async void RunAffiliateAgent()
+    {
+        if (agentRunning) return;
+        if (browser.CoreWebView2 is null)
+        {
+            MessageBox.Show("Trình duyệt chưa sẵn sàng.");
+            return;
+        }
+
+        var pending = items.Where(p => string.IsNullOrWhiteSpace(p.AffiliateUrl)).ToList();
+        if (pending.Count == 0)
+        {
+            MessageBox.Show("Không còn sản phẩm nào đang chờ tạo link.");
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            $"Agent sẽ lần lượt điền {pending.Count} URL vào trang Custom Link đang mở và bấm nút tạo link trên giao diện. Hãy chắc chắn bạn đã đăng nhập đúng tài khoản Affiliate và đang ở trang Custom Link. Tiếp tục?",
+            "Xác nhận chạy Affiliate Agent", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
+
+        agentRunning = true;
+        int completed = 0;
+        try
+        {
+            foreach (var product in pending)
+            {
+                status.Text = $"Agent đang tạo link {completed + 1}/{pending.Count}: {product.Name}";
+                var input = JsonSerializer.Serialize(product.ProductUrl);
+                var script = """
+                (async (productUrl) => {
+                  const visible = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
+                  const norm = s => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+                  const fields = [...document.querySelectorAll('input:not([type=hidden]), textarea')]
+                    .filter(visible).filter(e => !e.disabled && !e.readOnly);
+                  const scored = fields.map(e => {
+                    const meta = norm([e.placeholder, e.getAttribute('aria-label'), e.name, e.id,
+                      e.parentElement?.innerText, e.labels ? [...e.labels].map(x => x.innerText).join(' ') : ''].join(' '));
+                    return { e, score: /(product|商品|sản phẩm|url|link|đường dẫn)/i.test(meta) ? 2 : 0 };
+                  }).sort((a,b) => b.score-a.score);
+                  let field = scored[0]?.e;
+                  if (!field || (scored[0].score === 0 && fields.length !== 1))
+                    return { ok:false, message:'Không xác định chắc chắn ô nhập URL sản phẩm trên trang Custom Link.' };
+
+                  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), 'value')?.set;
+                  if (setter) setter.call(field, productUrl); else field.value = productUrl;
+                  field.dispatchEvent(new Event('input', { bubbles:true }));
+                  field.dispatchEvent(new Event('change', { bubbles:true }));
+
+                  const buttons = [...document.querySelectorAll('button,[role=button],input[type=submit]')]
+                    .filter(visible).filter(e => !e.disabled);
+                  const matches = buttons.filter(e => /(get link|generate|create link|tạo link|lấy link|tạo liên kết|lấy liên kết)/i.test(norm(e.innerText || e.value || e.getAttribute('aria-label'))));
+                  if (matches.length !== 1)
+                    return { ok:false, message:'Không tìm thấy duy nhất một nút tạo link phù hợp. Agent dừng để tránh bấm nhầm.' };
+
+                  const before = new Set([...document.querySelectorAll('a[href],input,textarea')].map(e => e.href || e.value || ''));
+                  matches[0].click();
+
+                  const isCandidate = value => {
+                    try {
+                      const u = new URL(value, location.href);
+                      return u.protocol === 'https:' &&
+                        (u.hostname === 'shope.ee' || u.hostname.endsWith('.shopee.vn')) &&
+                        value !== productUrl && !value.includes('/search?');
+                    } catch { return false; }
+                  };
+
+                  for (let i=0; i<36; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const candidates = [
+                      ...[...document.querySelectorAll('input,textarea')].map(e => e.value),
+                      ...[...document.querySelectorAll('a[href]')].map(e => e.href)
+                    ].filter(v => v && isCandidate(v) && !before.has(v));
+                    const unique = [...new Set(candidates)];
+                    if (unique.length === 1) return { ok:true, affiliateUrl:unique[0], message:'Đã lấy được link Affiliate' };
+                    if (unique.length > 1) {
+                      const short = unique.filter(v => /shope\.ee/i.test(v));
+                      if (short.length === 1) return { ok:true, affiliateUrl:short[0], message:'Đã lấy link rút gọn Affiliate' };
+                    }
+                  }
+                  return { ok:false, message:'Đã bấm tạo link nhưng chưa đọc được link kết quả. Agent dừng; hãy kiểm tra trang Custom Link.' };
+                })(__PRODUCT_URL_JSON__);
+                """;
+                script = script.Replace("__PRODUCT_URL_JSON__", input);
+                var raw = await browser.CoreWebView2.ExecuteScriptAsync(script);
+                var result = JsonSerializer.Deserialize<AgentLinkResult>(raw,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (result is null || !result.Ok || !IsAffiliateUrl(result.AffiliateUrl))
+                {
+                    MessageBox.Show($"Agent đã dừng ở sản phẩm {completed + 1}/{pending.Count}.\n{product.Name}\n{result?.Message ?? "Không đọc được kết quả."}\n\nCác link đã tạo trước đó đã được lưu; sản phẩm này chưa được đánh dấu hoàn tất.");
+                    break;
+                }
+
+                product.AffiliateUrl = result.AffiliateUrl;
+                completed++;
+                RefreshTable();
+                SaveData();
+                UpdateStatus();
+                await Task.Delay(700);
+            }
+
+            if (completed == pending.Count)
+                MessageBox.Show($"Hoàn tất! Agent đã tạo và lưu {completed} link Affiliate.");
+            else if (completed > 0)
+                MessageBox.Show($"Agent đã tạo và lưu {completed}/{pending.Count} link. Các sản phẩm còn lại vẫn ở trạng thái chờ.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Affiliate Agent gặp lỗi và đã dừng: " + ex.Message);
+        }
+        finally
+        {
+            agentRunning = false;
+            UpdateStatus();
+        }
     }
 
     private void AttachBulkAffiliates()
