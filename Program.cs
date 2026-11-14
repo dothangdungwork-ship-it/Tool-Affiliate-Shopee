@@ -566,7 +566,19 @@ public sealed class MainForm : Form
                   if (setter) setter.call(field, __PRODUCT_URL_JSON__); else field.value = __PRODUCT_URL_JSON__;
                   field.dispatchEvent(new InputEvent('input', { bubbles:true, inputType:'insertText', data:__PRODUCT_URL_JSON__ }));
                   field.dispatchEvent(new Event('change', { bubbles:true }));
-                  return { ok:true, message:'Đã điền URL vào ô Custom Link. Hãy kiểm tra nút chuyển đổi liên kết.' };
+                  const buttons = [...document.querySelectorAll('button,[role=button],input[type=submit]')]
+                    .filter(e => {
+                      const r = e.getBoundingClientRect(), s = getComputedStyle(e);
+                      return r.width > 20 && r.height > 15 && s.display !== 'none' &&
+                        s.visibility !== 'hidden' && !e.disabled;
+                    });
+                  const matches = buttons.filter(e =>
+                    /(get link|generate|create link|create|tạo link|lấy link|tạo liên kết|lấy liên kết|chuyển đổi liên kết)/i
+                      .test(norm(e.innerText || e.value || e.getAttribute('aria-label'))));
+                  if (matches.length !== 1)
+                    return { ok:false, message:'Đã điền URL nhưng không xác định được duy nhất nút chuyển đổi liên kết. Hãy kiểm tra giao diện Custom Link.' };
+                  matches[0].click();
+                  return { ok:true, message:'Đã điền URL và bấm nút chuyển đổi liên kết.' };
                 })();
                 """;
                 var safeProductUrl = JsonSerializer.Serialize(product.ProductUrl);
