@@ -331,6 +331,10 @@ public sealed class MainForm : Form
             submit.Enabled = false;
             try
             {
+                // Mở thẳng Affiliate Dashboard. Trang chủ affiliate khi chưa đăng nhập
+                // chỉ là landing page và không có ô tài khoản/mật khẩu.
+                browser.CoreWebView2.Navigate("https://affiliate.shopee.vn/dashboard");
+                await Task.Delay(2500);
                 var accountJson = JsonSerializer.Serialize(phone.Text.Trim());
                 var passwordJson = JsonSerializer.Serialize(password.Text);
                 const string script = """
@@ -340,6 +344,21 @@ public sealed class MainForm : Form
                     return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
                   };
                   const fields = [...document.querySelectorAll('input:not([type=hidden])')].filter(visible);
+                  // Nếu vẫn đang ở landing page, bấm CTA chính thức để mở luồng đăng nhập.
+                  const hasLoginFields = fields.some(e => e.type === 'password' ||
+                    /phone|email|username|account|số điện thoại|tài khoản/i.test(
+                      (e.placeholder || '') + ' ' + (e.name || '') + ' ' + (e.id || '') + ' ' + (e.getAttribute('aria-label') || '')));
+                  if (!hasLoginFields) {
+                    const cta = [...document.querySelectorAll('a,button,[role=button]')].find(e => {
+                      if (!visible(e)) return false;
+                      const t = (e.innerText || e.textContent || '').trim().toLowerCase();
+                      return /tham gia ngay|đăng nhập|login|join now|get started/i.test(t);
+                    });
+                    if (cta) {
+                      cta.click();
+                      return {ok:false, retry:true, message:'Đang mở luồng đăng nhập chính thức của Shopee. Vui lòng nhấn nút đăng nhập lại sau khi trang chuyển xong.'};
+                    }
+                  }
                   const meta = e => ((e.placeholder || '') + ' ' + (e.getAttribute('aria-label') || '') + ' ' +
                     (e.name || '') + ' ' + (e.id || '') + ' ' + (e.parentElement?.innerText || '')).toLowerCase();
                   const user = fields.filter(e => !/password|mật khẩu/i.test((e.type || '') + ' ' + meta(e)))
