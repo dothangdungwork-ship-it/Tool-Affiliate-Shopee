@@ -451,11 +451,16 @@ public sealed class MainForm : Form
                   const scored = fields.map(e => {
                     const meta = norm([e.placeholder, e.getAttribute('aria-label'), e.name, e.id,
                       e.parentElement?.innerText, e.labels ? [...e.labels].map(x => x.innerText).join(' ') : ''].join(' '));
-                    return { e, score: /(product|商品|sản phẩm|url|link|đường dẫn)/i.test(meta) ? 2 : 0 };
+                    let score = 0;
+                    // Shopee Custom Link currently labels its main URL box with this English placeholder.
+                    if (e.tagName === 'TEXTAREA' && /(convert multiple links|input up to 5 links|shopee\\.vn)/i.test(meta)) score = 100;
+                    else if (e.tagName === 'TEXTAREA') score = 20;
+                    else if (/(product|商品|sản phẩm|url|link|đường dẫn)/i.test(meta)) score = 10;
+                    return { e, score };
                   }).sort((a,b) => b.score-a.score);
                   const field = scored[0]?.e;
                   if (!field || (scored[0].score === 0 && fields.length !== 1))
-                    return { ok:false, message:'Không xác định chắc chắn ô nhập URL sản phẩm trên trang Custom Link.' };
+                    return { ok:false, message:'Không tìm thấy ô nhập URL Custom Link. Hãy kiểm tra trang Shopee đã tải đầy đủ.' };
                   const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), 'value')?.set;
                   if (setter) setter.call(field, __PRODUCT_URL_JSON__); else field.value = __PRODUCT_URL_JSON__;
                   field.dispatchEvent(new Event('input', { bubbles:true }));
