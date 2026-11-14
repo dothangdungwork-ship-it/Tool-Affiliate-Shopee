@@ -411,13 +411,8 @@ public sealed class MainForm : Form
                     new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 if (submit is null || !submit.Ok)
                 {
-                    var failed = submit ?? new AgentLinkResult { Ok = false, Message = "Không nhận được xác nhận từ trang Custom Link." };
-                    var result = failed;
-                    if (result is null || !result.Ok || !IsAffiliateUrl(result.AffiliateUrl))
-                    {
-                        MessageBox.Show($"Agent đã dừng ở sản phẩm {completed + 1}/{pending.Count}.\\n{product.Name}\\n{result.Message}\\n\\nCác link đã tạo trước đó đã được lưu; sản phẩm này chưa được đánh dấu hoàn tất.");
-                        break;
-                    }
+                    MessageBox.Show($"Agent đã dừng ở sản phẩm {completed + 1}/{pending.Count}.\\n{product.Name}\\n{submit?.Message ?? "Không nhận được xác nhận từ trang Custom Link."}\\n\\nCác link đã tạo trước đó đã được lưu; sản phẩm này chưa được đánh dấu hoàn tất.");
+                    break;
                 }
 
                 AgentLinkResult? result = null;
