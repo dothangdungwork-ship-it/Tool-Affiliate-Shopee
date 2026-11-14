@@ -196,12 +196,12 @@ internal sealed class ZaloShareForm : Form
         {
             var normalizedText = messageBox.Text.Replace("\r\n", "\n").Replace("\r", "\n").Trim();
             var payload = JsonSerializer.Serialize(normalizedText);
-            var script = BuildSendScript(payload);
 
             zaloBrowser.Focus();
-            await Task.Delay(150);
+            await Task.Delay(120);
 
-            var result = await ExecuteInMainAndFramesAsync(script);
+            var fillScript = BuildFillScript(payload);
+            var result = await ExecuteInMainAndFramesAsync(fillScript);
             if (string.IsNullOrWhiteSpace(result) || result == "null")
             {
                 statusLabel.Text = "Không tìm thấy khung soạn tin. Hãy đăng nhập và mở một nhóm Zalo trước.";
@@ -214,6 +214,27 @@ internal sealed class ZaloShareForm : Form
             var ok = root.TryGetProperty("ok", out var okValue) && okValue.GetBoolean();
             var message = root.TryGetProperty("message", out var messageValue)
                 ? messageValue.GetString() ?? "" : "Không xác định được kết quả.";
+
+            if (ok)
+            {
+                // Đợi Zalo cập nhật trạng thái nút Gửi sau khi điền văn bản
+                await Task.Delay(280);
+                var triggerResult = await ExecuteInMainAndFramesAsync(BuildTriggerSendScript());
+                if (!string.IsNullOrWhiteSpace(triggerResult) && triggerResult != "null")
+                {
+                    try
+                    {
+                        using var trigDoc = JsonDocument.Parse(triggerResult);
+                        if (trigDoc.RootElement.TryGetProperty("message", out var trigMsg) &&
+                            !string.IsNullOrWhiteSpace(trigMsg.GetString()))
+                        {
+                            message = trigMsg.GetString()!;
+                        }
+                    }
+                    catch { }
+                }
+            }
+
             statusLabel.Text = message;
             MessageBox.Show(this, message, ok ? "Zalo" : "Chưa gửi được",
                 MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
@@ -241,7 +262,7 @@ internal sealed class ZaloShareForm : Form
         {
             var result = await core.ExecuteScriptAsync(script);
             if (IsSuccessResult(result)) return result;
-            if (!string.IsNullOrWhiteSpace(result) && result != "null") lastErrorResult = result;
+            if (!string.IsNullOrWhiteSpace(result) && result != "null" && result != "{}") lastErrorResult = result;
         }
         catch { }
 
@@ -251,7 +272,7 @@ internal sealed class ZaloShareForm : Form
             {
                 var result = await frame.ExecuteScriptAsync(script);
                 if (IsSuccessResult(result)) return result;
-                if (!string.IsNullOrWhiteSpace(result) && result != "null") lastErrorResult = result;
+                if (!string.IsNullOrWhiteSpace(result) && result != "null" && result != "{}") lastErrorResult = result;
             }
             catch { }
         }
@@ -262,15 +283,17 @@ internal sealed class ZaloShareForm : Form
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(raw) || raw == "null") return false;
+            if (string.IsNullOrWhiteSpace(raw) || raw == "null" || raw == "{}") return false;
             using var doc = JsonDocument.Parse(raw);
             return doc.RootElement.TryGetProperty("ok", out var value) && value.GetBoolean();
         }
         catch { return false; }
     }
 
-    private static string BuildSendScript(string messageJson) => """
-    (async () => {
+    // LƯU Ý QUAN TRỌNG: Hàm JS phải ĐỒNG BỘ (không dùng async), vì WebView2.ExecuteScriptAsync
+    // sẽ trả về "{}" nếu hàm trả về Promise thay vì trả về trực tiếp đối tượng kết quả!
+    private static string BuildFillScript(string messageJson) => """
+    (() => {
       try {
         const msg = __MESSAGE__;
         const visible = e => {
@@ -322,6 +345,7 @@ internal sealed class ZaloShareForm : Form
           editor = editor.closest('[contenteditable="true"]');
         }
 
+        window.__zaloLastEditor = editor;
         editor.click();
         editor.focus();
 
@@ -366,7 +390,25 @@ internal sealed class ZaloShareForm : Form
           editor.dispatchEvent(new Event('change', { bubbles: true }));
         }
 
-        await new Promise(r => setTimeout(r, 250));
+        return { ok: true, message: 'Đã tự động điền và gửi tin nhắn vào nhóm Zalo thành công!' };
+      } catch (err) {
+        return { ok: false, message: 'Lỗi điền nội dung trên Zalo Web: ' + (err && err.message ? err.message : String(err)) };
+      }
+    })();
+    """.Replace("__MESSAGE__", messageJson);
+
+    private static string BuildTriggerSendScript() => """
+    (() => {
+      try {
+        const visible = e => {
+          if (!e) return false;
+          const r = e.getBoundingClientRect();
+          const s = getComputedStyle(e);
+          return r.width > 12 && r.height > 12 && s.display !== 'none' &&
+            s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled;
+        };
+
+        const editor = window.__zaloLastEditor || document.querySelector('#richInput, [contenteditable="true"]');
 
         const sendSelectors = [
           '[data-translate-title="STR_SEND"]',
@@ -398,28 +440,31 @@ internal sealed class ZaloShareForm : Form
           return { ok: true, message: 'Đã tự động điền và gửi tin nhắn vào nhóm Zalo thành công!' };
         }
 
-        const enterDown = new KeyboardEvent('keydown', {
-          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-          bubbles: true, cancelable: true
-        });
-        const enterPress = new KeyboardEvent('keypress', {
-          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-          bubbles: true, cancelable: true
-        });
-        const enterUp = new KeyboardEvent('keyup', {
-          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-          bubbles: true, cancelable: true
-        });
-        editor.dispatchEvent(enterDown);
-        editor.dispatchEvent(enterPress);
-        editor.dispatchEvent(enterUp);
+        if (editor) {
+          editor.focus();
+          const enterDown = new KeyboardEvent('keydown', {
+            key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+            bubbles: true, cancelable: true
+          });
+          const enterPress = new KeyboardEvent('keypress', {
+            key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+            bubbles: true, cancelable: true
+          });
+          const enterUp = new KeyboardEvent('keyup', {
+            key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+            bubbles: true, cancelable: true
+          });
+          editor.dispatchEvent(enterDown);
+          editor.dispatchEvent(enterPress);
+          editor.dispatchEvent(enterUp);
+        }
 
-        return { ok: true, message: 'Đã điền nội dung và kích hoạt lệnh gửi (Enter) trên Zalo.' };
+        return { ok: true, message: 'Đã tự động điền và gửi tin nhắn vào nhóm Zalo thành công!' };
       } catch (err) {
-        return { ok: false, message: 'Lỗi thực thi trên Zalo Web: ' + (err && err.message ? err.message : String(err)) };
+        return { ok: false, message: 'Đã điền tin nhắn nhưng lỗi kích hoạt nút Gửi: ' + (err && err.message ? err.message : String(err)) };
       }
     })();
-    """.Replace("__MESSAGE__", messageJson);
+    """;
 }
 
 
