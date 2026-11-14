@@ -5,7 +5,7 @@ using System.Text.Json;
 using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Web.WebView2.Core;
 
-namespace ShopeeAffiliateAgent;
+namespace ToolAffiliate;
 
 internal static class Program
 {
@@ -69,11 +69,11 @@ public sealed class MainForm : Form
     private bool showUnavailableOnly;
     private bool availabilityCheckRunning;
     private const string CustomLinkUrl = "https://affiliate.shopee.vn/offer/custom_link";
-    private readonly string temporaryBrowserProfile = Path.Combine(Path.GetTempPath(), "ShopeeAffiliateAgent", Guid.NewGuid().ToString("N"));
+    private readonly string temporaryBrowserProfile = Path.Combine(Path.GetTempPath(), "ToolAffiliate", Guid.NewGuid().ToString("N"));
 
     public MainForm()
     {
-        Text = "Shopee Affiliate Agent V3 - Safe Assisted Workflow";
+        Text = "Tool Affiliate - Công cụ quản lý Shopee Affiliate";
         Width = 1580;
         Height = 980;
         MinimumSize = new Size(1180, 760);
@@ -162,7 +162,7 @@ public sealed class MainForm : Form
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Không khởi tạo được WebView2: " + ex.Message, "Shopee Affiliate Agent",
+                MessageBox.Show("Không khởi tạo được WebView2: " + ex.Message, "Tool Affiliate",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         };
@@ -203,7 +203,7 @@ public sealed class MainForm : Form
         panel.Padding = new Padding(12);
         var heading = new Label
         {
-            Text = "SHOPEE AFFILIATE AGENT V4",
+            Text = "TOOL AFFILIATE",
             Font = new Font("Segoe UI", 16, FontStyle.Bold),
             Dock = DockStyle.Top,
             Height = 42
