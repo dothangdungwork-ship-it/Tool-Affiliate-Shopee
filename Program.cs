@@ -230,30 +230,29 @@ public sealed class MainForm : Form
 
         const string scriptTemplate = """
         (() => {
-          const visible = e => { const r=e.getBoundingClientRect(); return r.width>0 && r.height>0; };
           const found = [];
           const seen = new Set();
-          const isProduct = u => {
-            try {
-              const x = new URL(u, location.href);
-              return /(^|\.)shopee\.vn$/i.test(x.hostname) &&
-                (/\/product\/\d+\/\d+/i.test(x.pathname) || /-i\.\d+\.\d+/i.test(x.pathname));
-            } catch { return false; }
-          };
-          for (const a of document.querySelectorAll('a[href]')) {
-            if (!visible(a)) continue;
-            let href = '';
-            try { href = new URL(a.href, location.href).href.split('?')[0]; } catch { continue; }
-            if (!isProduct(href) || seen.has(href)) continue;
+          const anchors = [...document.querySelectorAll('a[href]')];
+          for (const a of anchors) {
+            let url;
+            try { url = new URL(a.getAttribute('href'), location.href); } catch { continue; }
+            if (!/(^|\\.)shopee\\.vn$/i.test(url.hostname)) continue;
+            const path = decodeURIComponent(url.pathname);
+            const productLike = /\\/product\\/\\d+\\/\\d+/i.test(path) || /-i\\.\\d+\\.\\d+/i.test(path);
+            if (!productLike) continue;
+            const href = url.origin + url.pathname;
+            if (seen.has(href)) continue;
             const card = a.closest('[data-sqe="item"], [data-testid*="item"], li') || a.parentElement?.parentElement || a.parentElement;
-            const name = ((card?.innerText || a.innerText || a.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim()).slice(0, 240);
+            const name = ((card?.innerText || a.innerText || a.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim()).slice(0, 240);
             seen.add(href);
             found.push({ name: name || 'Sản phẩm Shopee', productUrl: href });
             if (found.length >= __LIMIT__) break;
           }
-          return found;
+          return { products: found, anchorCount: anchors.length,
+            sample: anchors.slice(0, 12).map(a => a.getAttribute('href')).filter(Boolean) };
         })();
         """;
+
         var script = scriptTemplate.Replace("__LIMIT__", limit.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         try
@@ -264,8 +263,11 @@ public sealed class MainForm : Form
             {
                 if (attempt > 0) await Task.Delay(1000);
                 var raw = await browser.CoreWebView2.ExecuteScriptAsync(script);
-                products = JsonSerializer.Deserialize<List<VisibleProduct>>(raw,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+                using var resultDoc = JsonDocument.Parse(raw);
+                var resultRoot = resultDoc.RootElement;
+                if (resultRoot.TryGetProperty("products", out var productArray))
+                    products = JsonSerializer.Deserialize<List<VisibleProduct>>(productArray.GetRawText(),
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
             }
             if (products.Count == 0)
             {
