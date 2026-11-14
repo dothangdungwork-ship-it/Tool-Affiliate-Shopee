@@ -177,7 +177,7 @@ public sealed class MainForm : Form
         table.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         table.ReadOnly = true;
         table.AllowUserToAddRows = false;
-        table.MultiSelect = false;
+        table.MultiSelect = true;
         table.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         table.AutoGenerateColumns = false;
         table.RowHeadersVisible = false;
@@ -194,6 +194,7 @@ public sealed class MainForm : Form
         var exportButton = AddButton(panel, "Xuất CSV", 398, 835, 192, ExportCsv);
         var filterButton = AddButton(panel, "Chỉ hiện sản phẩm không thể mua", 12, 870, 280, ToggleUnavailableFilter);
         var exportUnavailableButton = AddButton(panel, "Xuất DS không thể mua", 302, 870, 288, ExportUnavailableCsv);
+        var deleteSelectedButton = AddButton(panel, "Xóa sản phẩm đã chọn", 12, 905, 578, DeleteSelectedProducts);
 
         var note = new Label
         {
@@ -224,7 +225,7 @@ public sealed class MainForm : Form
             }
 
             table.Width = contentWidth;
-            int actionY = panel.ClientSize.Height - 145;
+            int actionY = panel.ClientSize.Height - 180;
             table.Height = Math.Max(260, actionY - table.Top - 10);
             int third = (contentWidth - 20) / 3;
             openButton.SetBounds(12, actionY, third, 32);
@@ -233,7 +234,7 @@ public sealed class MainForm : Form
             int half = (contentWidth - 10) / 2;
             filterButton.SetBounds(12, actionY + 35, half, 32);
             exportUnavailableButton.SetBounds(22 + half, actionY + 35, half, 32);
-            note.Top = actionY + 72;
+            deleteSelectedButton.SetBounds(12, actionY + 70, contentWidth, 32);\n            note.Top = actionY + 107;
             note.Width = contentWidth;
         };
     }
@@ -641,6 +642,37 @@ public sealed class MainForm : Form
         UpdateStatus();
         bulkAffiliates.Clear();
         MessageBox.Show($"Đã gắn {assigned} link theo thứ tự các sản phẩm đang chờ. Vui lòng kiểm tra lại từng cặp link trước khi sử dụng.");
+    }
+
+    private void DeleteSelectedProducts()
+    {
+        var selected = table.SelectedRows
+            .Cast<DataGridViewRow>()
+            .Select(row => row.DataBoundItem as ProductItem)
+            .Where(item => item is not null)
+            .Cast<ProductItem>()
+            .Distinct()
+            .ToList();
+
+        if (selected.Count == 0)
+        {
+            MessageBox.Show("Bạn hãy chọn một hoặc nhiều sản phẩm trong danh sách trước khi xóa.",
+                "Chưa chọn sản phẩm", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            $"Bạn có chắc muốn xóa {selected.Count} sản phẩm đã chọn khỏi danh sách?\\nThao tác này không thể hoàn tác.",
+            "Xác nhận xóa sản phẩm", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+
+        if (confirm != DialogResult.Yes) return;
+
+        foreach (var item in selected) items.Remove(item);
+        Renumber();
+        RefreshTable();
+        SaveData();
+        UpdateStatus();
+        status.Text = $"Đã xóa {selected.Count} sản phẩm khỏi danh sách.";
     }
 
     private void RemoveSelected()
