@@ -61,6 +61,7 @@ public sealed class MainForm : Form
     private bool showUnavailableOnly;
     private bool availabilityCheckRunning;
     private const string CustomLinkUrl = "https://affiliate.shopee.vn/offer/custom_link";
+    private readonly string temporaryBrowserProfile = Path.Combine(Path.GetTempPath(), "ShopeeAffiliateAgent", Guid.NewGuid().ToString("N"));
 
     public MainForm()
     {
@@ -112,11 +113,14 @@ public sealed class MainForm : Form
                         split.SplitterDistance = Math.Max(200, available / 2);
                     }
                 }));
-                var profile = Path.Combine(
+                // Mỗi lần mở ứng dụng dùng một profile tạm hoàn toàn mới.
+                // Phiên Shopee chỉ tồn tại trong phiên chạy hiện tại, không được ghi nhớ giữa các lần mở.
+                var legacyProfile = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "ShopeeAffiliateAgent", "WebViewProfile");
-                Directory.CreateDirectory(profile);
-                var env = await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(null, profile);
+                TryDeleteDirectory(legacyProfile);
+                Directory.CreateDirectory(temporaryBrowserProfile);
+                var env = await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(null, temporaryBrowserProfile);
                 await browser.EnsureCoreWebView2Async(env);
                 browser.CoreWebView2.NavigationCompleted += async (_, e) =>
                 {
@@ -146,6 +150,34 @@ public sealed class MainForm : Form
         };
 
         FormClosing += (_, _) => SaveData();
+        FormClosed += (_, _) =>
+        {
+            try
+            {
+                browser.CoreWebView2?.Stop();
+                browser.Dispose();
+            }
+            catch { }
+            TryDeleteDirectory(temporaryBrowserProfile);
+        };
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        if (!Directory.Exists(path)) return;
+        // WebView2 đôi khi nhả file profile chậm khi đóng; thử xóa lại vài lần.
+        for (int attempt = 0; attempt < 8; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch
+            {
+                Thread.Sleep(250);
+            }
+        }
     }
 
     private void BuildWorkspace(Control panel)
