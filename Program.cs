@@ -27,11 +27,6 @@ public sealed class AgentLinkResult
 {
     public bool Ok { get; set; }
     public string AffiliateUrl { get; set; } = "";
-    public string ShopName { get; set; } = "";
-    public string ListedPrice { get; set; } = "";
-    public string PublicVoucherPrice { get; set; } = "";
-    public string AccountVoucherPrice { get; set; } = "";
-    public string VoucherInfo { get; set; } = "";
     public string Message { get; set; } = "";
 }
 
