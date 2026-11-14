@@ -72,8 +72,10 @@ public sealed class MainForm : Form
 
         var split = new SplitContainer
         {
-            Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 760,
-            Panel1MinSize = 540, Panel2MinSize = 540, FixedPanel = FixedPanel.None, SplitterWidth = 6
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Vertical,
+            FixedPanel = FixedPanel.None,
+            SplitterWidth = 6
         };
         Controls.Add(split);
         BuildWorkspace(split.Panel1);
@@ -93,6 +95,23 @@ public sealed class MainForm : Form
         {
             try
             {
+                // Apply splitter constraints only after the form has its real client size.
+                BeginInvoke(new Action(() =>
+                {
+                    int available = split.ClientSize.Width;
+                    if (available >= 1090)
+                    {
+                        split.Panel1MinSize = 540;
+                        split.Panel2MinSize = 540;
+                        split.SplitterDistance = Math.Clamp(available / 2, 540, available - split.Panel2MinSize - split.SplitterWidth);
+                    }
+                    else
+                    {
+                        split.Panel1MinSize = 0;
+                        split.Panel2MinSize = 0;
+                        split.SplitterDistance = Math.Max(200, available / 2);
+                    }
+                }));
                 var profile = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "ShopeeAffiliateAgent", "WebViewProfile");
