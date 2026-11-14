@@ -154,7 +154,7 @@ public sealed class MainForm : Form
         bulkAffiliates.PlaceholderText = "Dán các link Affiliate Shopee do Custom Link chính thức trả về, mỗi dòng một link...";
         panel.Controls.Add(bulkAffiliates);
         AddButton(panel, "Gắn link lần lượt cho sản phẩm đang chờ", 12, 456, 578, AttachBulkAffiliates);
-        AddButton(panel, "AI Agent: tự tạo link Affiliate", 12, 492, 578, RunAffiliateAgent);
+        AddButton(panel, "AI Agent: tự tạo link Affiliate", 12, 492, 578, () => RunAffiliateAgent());
 
         panel.Controls.Add(LabelAt("4. Danh sách sản phẩm (tối đa 100)", 534));
         table.SetBounds(12, 561, 578, 264);
