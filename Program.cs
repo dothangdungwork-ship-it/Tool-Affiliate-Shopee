@@ -54,6 +54,8 @@ public sealed class MainForm : Form
         "ShopeeAffiliateAgent", "products-v3.json");
     private bool loading;
     private bool agentRunning;
+    private bool autoAgentAfterNavigation;
+    private const string CustomLinkUrl = "https://affiliate.shopee.vn/offer/custom_link";
 
     public MainForm()
     {
@@ -88,8 +90,17 @@ public sealed class MainForm : Form
                 Directory.CreateDirectory(profile);
                 var env = await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(null, profile);
                 await browser.EnsureCoreWebView2Async(env);
-                browser.CoreWebView2.NavigationCompleted += (_, e) =>
-                    status.Text = e.IsSuccess ? "Trình duyệt sẵn sàng. Hãy đăng nhập Shopee trong khung bên phải." : "Không tải được trang hiện tại.";
+                browser.CoreWebView2.NavigationCompleted += async (_, e) =>
+                {
+                    status.Text = e.IsSuccess ? "Trình duyệt sẵn sàng." : "Không tải được trang hiện tại.";
+                    if (e.IsSuccess && autoAgentAfterNavigation &&
+                        browser.Source?.AbsolutePath.Equals("/offer/custom_link", StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        autoAgentAfterNavigation = false;
+                        await Task.Delay(1800);
+                        RunAffiliateAgent(true);
+                    }
+                };
                 browser.CoreWebView2.Navigate("https://affiliate.shopee.vn/");
             }
             catch (Exception ex)
@@ -122,7 +133,7 @@ public sealed class MainForm : Form
         AddButton(panel, "Lấy sản phẩm đang hiển thị", 418, 75, 172, ExtractVisibleProducts);
 
         AddButton(panel, "Mở Shopee Affiliate", 12, 114, 280, () => Navigate("https://affiliate.shopee.vn/"));
-        AddButton(panel, "Mở Custom Link", 302, 114, 288, () => Navigate("https://affiliate.shopee.vn/"));
+        AddButton(panel, "Mở Custom Link", 302, 114, 288, () => Navigate(CustomLinkUrl));
 
         panel.Controls.Add(LabelAt("2. Thêm sản phẩm", 158));
         AddButton(panel, "Thêm URL trang đang mở", 12, 185, 280, AddCurrentPage);
@@ -167,7 +178,7 @@ public sealed class MainForm : Form
 
         var note = new Label
         {
-            Text = "Agent hỗ trợ thao tác Custom Link trên giao diện Shopee đang mở. Bạn cần đăng nhập và mở đúng trang Custom Link trước khi chạy. Nếu giao diện thay đổi hoặc Shopee yêu cầu CAPTCHA/OTP, Agent sẽ dừng để bạn xử lý. Không đọc cookie, không gọi API nội bộ.",
+            Text = "Sau khi lấy sản phẩm đang hiển thị, Agent tự mở Custom Link và lần lượt tạo link Affiliate trên giao diện Shopee. Cần đăng nhập trước; CAPTCHA/OTP sẽ yêu cầu bạn xử lý. Không đọc cookie, không gọi API nội bộ.",
             Left = 12, Top = 875, Width = 578, Height = 58,
             ForeColor = Color.DarkSlateGray
         };
@@ -271,7 +282,16 @@ public sealed class MainForm : Form
             RefreshTable();
             SaveData();
             UpdateStatus();
-            MessageBox.Show($"Đã đọc {products.Count} sản phẩm đang hiển thị; thêm mới {added}, bỏ qua {skipped} sản phẩm trùng/không hợp lệ hoặc vượt giới hạn 100.");
+            if (added > 0)
+            {
+                autoAgentAfterNavigation = true;
+                status.Text = $"Đã thêm {added} sản phẩm. Đang tự mở Custom Link...";
+                Navigate(CustomLinkUrl);
+            }
+            else
+            {
+                MessageBox.Show($"Đã đọc {products.Count} sản phẩm đang hiển thị; không có sản phẩm mới để tạo link.");
+            }
         }
         catch (Exception ex)
         {
@@ -318,7 +338,7 @@ public sealed class MainForm : Form
         MessageBox.Show($"Đã thêm {added} sản phẩm. Bỏ qua {skipped} dòng không hợp lệ, trùng hoặc vượt giới hạn 100.");
     }
 
-    private async void RunAffiliateAgent()
+    private async void RunAffiliateAgent(bool silent = false)
     {
         if (agentRunning) return;
         if (browser.CoreWebView2 is null)
@@ -334,10 +354,20 @@ public sealed class MainForm : Form
             return;
         }
 
-        var confirm = MessageBox.Show(
-            $"Agent sẽ lần lượt điền {pending.Count} URL vào trang Custom Link đang mở và bấm nút tạo link trên giao diện. Hãy chắc chắn bạn đã đăng nhập đúng tài khoản Affiliate và đang ở trang Custom Link. Tiếp tục?",
-            "Xác nhận chạy Affiliate Agent", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-        if (confirm != DialogResult.Yes) return;
+        if (!silent)
+        {
+            var confirm = MessageBox.Show(
+                $"Agent sẽ lần lượt điền {pending.Count} URL vào trang Custom Link và bấm nút lấy link trên giao diện Shopee. Tiếp tục?",
+                "Xác nhận chạy Affiliate Agent", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (confirm != DialogResult.Yes) return;
+        }
+
+        if (!string.Equals(browser.Source?.AbsolutePath, "/offer/custom_link", StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show("Chưa ở đúng trang Custom Link. Agent sẽ mở trang chính thức rồi bạn hãy chạy lại.");
+            Navigate(CustomLinkUrl);
+            return;
+        }
 
         agentRunning = true;
         int completed = 0;
