@@ -442,13 +442,15 @@ public sealed class MainForm : Form
                     await new Promise(resolve => setTimeout(resolve, 500));
                     const modalLinks = readResultModal();
                     if (modalLinks.length === 1) {
-                      const close = [...document.querySelectorAll('button,[role=button]')]
-                        .find(e => {
-                          const r = e.getBoundingClientRect();
-                          const t = (e.getAttribute('aria-label') || e.title || e.innerText || '').toLowerCase();
-                          return r.width > 0 && r.height > 0 &&
-                            (t === 'close' || t === '关闭' || t === 'đóng' || e.closest('[role=dialog],[aria-modal=true],.ant-modal')?.innerText?.toLowerCase().includes('link of custom link'));
-                        });
+                      const close = [...document.querySelectorAll(
+                        '.ant-modal-close, [aria-label="Close"], [aria-label="close"], [title="Close"], [data-dismiss="modal"]'
+                      )].find(e => {
+                        const r = e.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                      });
+                      if (close) close.click();
+                      else document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', code:'Escape', bubbles:true }));
+                      await new Promise(resolve => setTimeout(resolve, 250));
                       return { ok:true, affiliateUrl:modalLinks[0], message:'Đã đọc link từ cửa sổ Link of Custom Link' };
                     }
                     const candidates = [
