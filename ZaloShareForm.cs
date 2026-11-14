@@ -36,7 +36,7 @@ public sealed partial class MainForm : Form
         if (selected.Count == 0)
         {
             MessageBox.Show(this,
-                "Hãy chọn một hoặc nhiều sản phẩm đã có link Affiliate trước khi gửi Zalo.",
+                "Hãy chọn ít nhất một sản phẩm đã có link Affiliate trước khi gửi Zalo.",
                 "Tool Affiliate", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
@@ -51,8 +51,7 @@ public sealed partial class MainForm : Form
         lines.Add("");
         lines.Add("Link sản phẩm tham khảo. Bạn xem thông tin và giá hiện tại trên Shopee nhé!");
 
-        var shareWindow = new ZaloShareForm(string.Join(Environment.NewLine, lines));
-        shareWindow.Show(this);
+        new ZaloShareForm(string.Join(Environment.NewLine, lines)).Show(this);
     }
 }
 
@@ -61,14 +60,16 @@ internal sealed class ZaloShareForm : Form
     private readonly WebView2 zaloBrowser = new();
     private readonly TextBox messageBox = new();
     private readonly Label statusLabel = new();
+    private readonly List<CoreWebView2Frame> frames = new();
     private readonly string profilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "ToolAffiliate", "ZaloProfile");
     private bool initialized;
+    private bool sending;
 
     public ZaloShareForm(string message)
     {
-        Text = "Tool Affiliate - Chia sẻ link qua Zalo";
+        Text = "Tool Affiliate - Gửi link Affiliate qua Zalo";
         Width = 1120;
         Height = 820;
         MinimumSize = new Size(850, 650);
@@ -77,9 +78,9 @@ internal sealed class ZaloShareForm : Form
         var instructions = new Label
         {
             Dock = DockStyle.Top,
-            Height = 42,
-            Padding = new Padding(10, 8, 8, 4),
-            Text = "1) Đăng nhập Zalo nếu cần.  2) Tự chọn nhóm bạn muốn gửi ở danh sách chat.  3) Kiểm tra nội dung bên dưới rồi bấm Điền vào Zalo.  4) Tự kiểm tra và nhấn Gửi trong Zalo."
+            Height = 48,
+            Padding = new Padding(10, 7, 8, 4),
+            Text = "1) Đăng nhập Zalo nếu cần.  2) Mở đúng MỘT nhóm cần gửi.  3) Kiểm tra nội dung bên dưới.  4) Bấm GỬI TIN NHẮN để phần mềm tự điền và gửi vào nhóm đang mở."
         };
 
         zaloBrowser.Dock = DockStyle.Fill;
@@ -99,15 +100,15 @@ internal sealed class ZaloShareForm : Form
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false
         };
-        var fillButton = new Button { Text = "Điền vào khung chat Zalo", Width = 210, Height = 32 };
-        fillButton.Click += async (_, _) => await FillZaloComposerAsync();
+        var sendButton = new Button { Text = "GỬI TIN NHẮN VÀO NHÓM ĐANG MỞ", Width = 300, Height = 32 };
+        sendButton.Click += async (_, _) => await ConfirmAndSendAsync(sendButton);
         var copyButton = new Button { Text = "Sao chép nội dung", Width = 155, Height = 32 };
         copyButton.Click += (_, _) =>
         {
             Clipboard.SetText(messageBox.Text);
-            statusLabel.Text = "Đã sao chép. Bạn có thể dán thủ công vào Zalo.";
+            statusLabel.Text = "Đã sao chép nội dung.";
         };
-        actions.Controls.Add(fillButton);
+        actions.Controls.Add(sendButton);
         actions.Controls.Add(copyButton);
 
         statusLabel.Dock = DockStyle.Bottom;
@@ -119,7 +120,6 @@ internal sealed class ZaloShareForm : Form
         bottom.Controls.Add(messageLabel);
         bottom.Controls.Add(actions);
         bottom.Controls.Add(statusLabel);
-
         Controls.Add(zaloBrowser);
         Controls.Add(bottom);
         Controls.Add(instructions);
@@ -143,10 +143,20 @@ internal sealed class ZaloShareForm : Form
             await zaloBrowser.EnsureCoreWebView2Async(environment);
             zaloBrowser.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
             zaloBrowser.CoreWebView2.Settings.IsStatusBarEnabled = true;
+            zaloBrowser.CoreWebView2.FrameCreated += (_, args) =>
+            {
+                try
+                {
+                    var frame = args.Frame;
+                    frames.Add(frame);
+                    frame.Destroyed += (_, _) => frames.Remove(frame);
+                }
+                catch { }
+            };
             zaloBrowser.CoreWebView2.NavigationCompleted += (_, args) =>
             {
                 statusLabel.Text = args.IsSuccess
-                    ? "Zalo Web đã tải. Hãy đăng nhập và mở nhóm cần gửi."
+                    ? "Zalo Web đã tải. Đăng nhập và mở đúng một nhóm trước khi gửi."
                     : "Không tải được Zalo Web. Kiểm tra kết nối Internet.";
             };
             zaloBrowser.CoreWebView2.Navigate("https://chat.zalo.me/");
@@ -154,14 +164,14 @@ internal sealed class ZaloShareForm : Form
         catch (Exception ex)
         {
             statusLabel.Text = "Không khởi tạo được Zalo Web: " + ex.Message;
-            MessageBox.Show(this,
-                "Không thể mở Zalo Web trong Tool Affiliate.\n" + ex.Message,
+            MessageBox.Show(this, "Không thể mở Zalo Web.\n" + ex.Message,
                 "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 
-    private async Task FillZaloComposerAsync()
+    private async Task ConfirmAndSendAsync(Button sendButton)
     {
+        if (sending) return;
         if (zaloBrowser.CoreWebView2 is null)
         {
             statusLabel.Text = "Zalo Web chưa sẵn sàng.";
@@ -173,64 +183,146 @@ internal sealed class ZaloShareForm : Form
             return;
         }
 
+        var answer = MessageBox.Show(this,
+            "Phần mềm sẽ gửi nội dung bên dưới vào cuộc trò chuyện Zalo ĐANG MỞ.\n\n" +
+            "Hãy chắc chắn đây là đúng nhóm và bạn có quyền chia sẻ nội dung này.\n\n" +
+            "Bạn xác nhận gửi ngay bây giờ?",
+            "Xác nhận gửi tin nhắn Zalo", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (answer != DialogResult.Yes) return;
+
+        sending = true;
+        sendButton.Enabled = false;
         try
         {
-            var messageJson = JsonSerializer.Serialize(messageBox.Text);
-            var script = """
-            (() => {
-              const visible = e => {
-                const r = e.getBoundingClientRect();
-                const s = getComputedStyle(e);
-                return r.width > 0 && r.height > 0 &&
-                  s.display !== 'none' && s.visibility !== 'hidden';
-              };
-              const candidates = [...document.querySelectorAll(
-                '[contenteditable="true"], textarea, [role="textbox"]'
-              )].filter(visible);
-              if (!candidates.length)
-                return { ok:false, message:'Chưa tìm thấy khung soạn tin. Hãy đăng nhập và mở một nhóm Zalo trước.' };
-              const editor = candidates[candidates.length - 1];
-              editor.focus();
-              if (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT') {
-                const proto = editor.tagName === 'TEXTAREA'
-                  ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-                const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-                if (setter) setter.call(editor, __MESSAGE__);
-                else editor.value = __MESSAGE__;
-              } else {
-                editor.replaceChildren();
-                const lines = __MESSAGE__.split('\n');
-                lines.forEach((line, index) => {
-                  if (index) editor.appendChild(document.createElement('br'));
-                  if (line) editor.appendChild(document.createTextNode(line));
-                });
-              }
-              editor.dispatchEvent(new InputEvent('input', {
-                bubbles:true, inputType:'insertText', data:__MESSAGE__
-              }));
-              editor.dispatchEvent(new Event('change', { bubbles:true }));
-              return { ok:true, message:'Đã điền nội dung vào khung chat. Chưa gửi tin nhắn.' };
-            })();
-            """.Replace("__MESSAGE__", messageJson);
+            var payload = JsonSerializer.Serialize(messageBox.Text);
+            var script = BuildSendScript(payload);
+            var result = await ExecuteInMainAndFramesAsync(script);
+            if (result is null)
+            {
+                statusLabel.Text = "Không tìm thấy khung soạn tin. Hãy đăng nhập và mở một nhóm Zalo trước.";
+                MessageBox.Show(this, statusLabel.Text, "Không gửi được", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
 
-            var raw = await zaloBrowser.CoreWebView2.ExecuteScriptAsync(script);
-            using var result = JsonDocument.Parse(raw);
-            var root = result.RootElement;
+            using var document = JsonDocument.Parse(result);
+            var root = document.RootElement;
             var ok = root.TryGetProperty("ok", out var okValue) && okValue.GetBoolean();
             var message = root.TryGetProperty("message", out var messageValue)
-                ? messageValue.GetString() ?? "" : "Không rõ trạng thái.";
+                ? messageValue.GetString() ?? "" : "Không xác định được kết quả.";
             statusLabel.Text = message;
-            if (ok)
-                MessageBox.Show(this,
-                    "Nội dung đã được điền vào khung chat. Tool Affiliate chưa gửi tin.\n\nVui lòng kiểm tra đúng nhóm và nội dung, sau đó tự nhấn nút Gửi trong Zalo.",
-                    "Xác nhận gửi Zalo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            else
-                MessageBox.Show(this, message, "Chưa thể điền tin nhắn",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, message, ok ? "Zalo" : "Chưa gửi được",
+                MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
         catch (Exception ex)
         {
-            statusLabel.Text = "Lỗi khi điền nội dung: " + ex.Message;
+            statusLabel.Text = "Lỗi khi gửi: " + ex.Message;
+            MessageBox.Show(this, statusLabel.Text, "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            sending = false;
+            sendButton.Enabled = true;
         }
     }
+
+    private async Task<string?> ExecuteInMainAndFramesAsync(string script)
+    {
+        var core = zaloBrowser.CoreWebView2;
+        if (core is null) return null;
+
+        try
+        {
+            var result = await core.ExecuteScriptAsync(script);
+            if (IsSuccessResult(result)) return result;
+        }
+        catch { }
+
+        foreach (var frame in frames.ToArray())
+        {
+            try
+            {
+                var result = await frame.ExecuteScriptAsync(script);
+                if (IsSuccessResult(result)) return result;
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    private static bool IsSuccessResult(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            return doc.RootElement.TryGetProperty("ok", out var value) && value.GetBoolean();
+        }
+        catch { return false; }
+    }
+
+    private static string BuildSendScript(string messageJson) => """
+    (() => {
+      const msg = __MESSAGE__;
+      const visible = e => {
+        const r = e.getBoundingClientRect();
+        const s = getComputedStyle(e);
+        return r.width > 0 && r.height > 0 && s.display !== 'none' &&
+          s.visibility !== 'hidden' && !e.disabled;
+      };
+      const selectors = [
+        '[contenteditable="true"]', '[role="textbox"]', 'textarea',
+        'input[placeholder*="tin nhắn" i]', '[data-placeholder*="tin nhắn" i]'
+      ];
+      const candidates = [...new Set(selectors.flatMap(s => [...document.querySelectorAll(s)]))]
+        .filter(visible);
+      if (!candidates.length)
+        return {ok:false, message:'Không tìm thấy khung soạn tin trong trang/khung hiện tại.'};
+
+      const editor = candidates.sort((a,b) => {
+        const ar=a.getBoundingClientRect(), br=b.getBoundingClientRect();
+        return (br.bottom-br.top) - (ar.bottom-ar.top);
+      })[0];
+      editor.focus();
+
+      if (editor.isContentEditable || editor.getAttribute('contenteditable') === 'true') {
+        editor.replaceChildren();
+        const lines = msg.split('\n');
+        lines.forEach((line, i) => {
+          if (i) editor.appendChild(document.createElement('br'));
+          if (line) editor.appendChild(document.createTextNode(line));
+        });
+      } else {
+        const proto = editor.tagName === 'TEXTAREA'
+          ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (setter) setter.call(editor, msg); else editor.value = msg;
+      }
+      editor.dispatchEvent(new InputEvent('input', {
+        bubbles:true, inputType:'insertText', data:msg
+      }));
+      editor.dispatchEvent(new Event('change', {bubbles:true}));
+
+      const buttons = [...document.querySelectorAll('button,[role="button"],[aria-label],[title]')]
+        .filter(visible);
+      const sendButton = buttons.find(b => {
+        const label = [
+          b.innerText, b.getAttribute('aria-label'), b.getAttribute('title'),
+          b.getAttribute('data-tooltip')
+        ].filter(Boolean).join(' ').trim().toLowerCase();
+        return /^(gửi|send|gửi tin nhắn|send message)$/.test(label);
+      });
+
+      if (sendButton) {
+        sendButton.click();
+        return {ok:true, message:'Đã thao tác nút Gửi trong nhóm đang mở. Hãy kiểm tra tin nhắn trong cuộc trò chuyện.'};
+      }
+
+      editor.dispatchEvent(new KeyboardEvent('keydown', {
+        key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true, cancelable:true
+      }));
+      editor.dispatchEvent(new KeyboardEvent('keyup', {
+        key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true, cancelable:true
+      }));
+      return {ok:true, message:'Đã gửi lệnh Enter vào khung chat. Hãy kiểm tra cuộc trò chuyện để xác nhận tin đã được gửi.'};
+    })();
+    """.Replace("__MESSAGE__", messageJson);
 }
