@@ -326,3 +326,82 @@ internal sealed class ZaloShareForm : Form
     })();
     """.Replace("__MESSAGE__", messageJson);
 }
+
+
+public sealed partial class MainForm
+{
+    private void OpenZaloLogin()
+    {
+        using var login = new ZaloLoginForm();
+        login.ShowDialog(this);
+    }
+}
+
+internal sealed class ZaloLoginForm : Form
+{
+    private readonly WebView2 browser = new();
+    private readonly Label status = new();
+    private readonly string profilePath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ToolAffiliate", "ZaloProfile");
+    private bool initialized;
+
+    public ZaloLoginForm()
+    {
+        Text = "Đăng nhập Zalo bằng mã QR";
+        Width = 1100;
+        Height = 800;
+        MinimumSize = new Size(800, 600);
+        StartPosition = FormStartPosition.CenterParent;
+
+        var instruction = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 42,
+            Padding = new Padding(10, 8, 8, 4),
+            Text = "Đăng nhập Zalo bằng QR hoặc phương thức Zalo cung cấp. Phiên đăng nhập được lưu trên máy này để dùng lại."
+        };
+        browser.Dock = DockStyle.Fill;
+        status.Dock = DockStyle.Bottom;
+        status.Height = 28;
+        status.Padding = new Padding(8, 6, 0, 0);
+        status.Text = "Đang mở Zalo Web...";
+
+        Controls.Add(browser);
+        Controls.Add(status);
+        Controls.Add(instruction);
+
+        Shown += async (_, _) => await InitializeAsync();
+        FormClosed += (_, _) =>
+        {
+            try { browser.CoreWebView2?.Stop(); } catch { }
+            browser.Dispose();
+        };
+    }
+
+    private async Task InitializeAsync()
+    {
+        if (initialized) return;
+        initialized = true;
+        try
+        {
+            Directory.CreateDirectory(profilePath);
+            var environment = await CoreWebView2Environment.CreateAsync(null, profilePath);
+            await browser.EnsureCoreWebView2Async(environment);
+            browser.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
+            browser.CoreWebView2.Settings.IsStatusBarEnabled = true;
+            browser.CoreWebView2.NavigationCompleted += (_, args) =>
+            {
+                status.Text = args.IsSuccess
+                    ? "Zalo Web đã mở. Quét mã QR để đăng nhập nếu được yêu cầu."
+                    : "Không tải được Zalo Web. Hãy kiểm tra Internet.";
+            };
+            browser.CoreWebView2.Navigate("https://chat.zalo.me/");
+        }
+        catch (Exception ex)
+        {
+            status.Text = "Không thể khởi tạo Zalo Web: " + ex.Message;
+            MessageBox.Show(this, status.Text, "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+}
