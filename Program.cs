@@ -1066,22 +1066,64 @@ public sealed class MainForm : Form
                     await Task.Delay(1100);
                     const string script = """
                     (() => {
-                      const clean = s => (s || '').replace(/\s+/g,' ').trim();
-                      const visible = e => { const r=e.getBoundingClientRect(); return r.width>0 && r.height>0; };
-                      const links = [...document.querySelectorAll('a[href]')].filter(a =>
-                        visible(a) && clean(a.innerText) && /\/shop\/|\/seller\//i.test(a.getAttribute('href') || ''));
-                      let shop = clean(links.sort((a,b) => clean(b.innerText).length - clean(a.innerText).length)[0]?.innerText || '');
-                      if (!shop) {
-                        const candidates = [...document.querySelectorAll('[class],[aria-label]')].filter(visible);
-                        const node = candidates.find(e => {
-                          const t = clean(e.innerText);
-                          const meta = clean(e.getAttribute('aria-label') || '');
-                          return t.length > 1 && t.length < 90 &&
-                            /shop name|shop|cửa hàng|người bán|seller/i.test(meta);
-                        });
-                        shop = clean(node?.innerText || node?.getAttribute('aria-label') || '');
+                      const clean = s => (s || '').replace(/\\s+/g,' ').trim();
+                      const visible = e => {
+                        const r=e.getBoundingClientRect(), s=getComputedStyle(e);
+                        return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden';
+                      };
+                      const valid = s => {
+                        s=clean(s);
+                        return s.length>=2 && s.length<=100 &&
+                          !/^(shop|cửa hàng|xem shop|xem cửa hàng|chat ngay|đánh giá|sản phẩm)$/i.test(s);
+                      };
+                      let shop = '';
+                      // 1. Dữ liệu cấu trúc (nếu trang cung cấp JSON-LD).
+                      const readSeller = obj => {
+                        if (!obj || typeof obj !== 'object') return '';
+                        if (obj.seller) {
+                          const v = typeof obj.seller === 'string' ? obj.seller :
+                            (obj.seller.name || obj.seller.alternateName || '');
+                          if (valid(v)) return clean(v);
+                        }
+                        for (const value of Object.values(obj)) {
+                          if (Array.isArray(value)) {
+                            for (const x of value) { const found=readSeller(x); if(found) return found; }
+                          } else if (value && typeof value === 'object') {
+                            const found=readSeller(value); if(found) return found;
+                          }
+                        }
+                        return '';
+                      };
+                      for (const node of document.querySelectorAll('script[type="application/ld+json"]')) {
+                        try { shop = readSeller(JSON.parse(node.textContent || '')); if(shop) break; } catch {}
                       }
-                      return { shopName: shop };
+                      // 2. Link cửa hàng trong vùng thông tin người bán.
+                      if (!shop) {
+                        const links = [...document.querySelectorAll('a[href]')].filter(a =>
+                          visible(a) && valid(a.innerText) &&
+                          /\\/(?:shop|seller)\\//i.test(a.getAttribute('href') || ''));
+                        shop = clean(links.sort((a,b) => clean(b.innerText).length-clean(a.innerText).length)[0]?.innerText || '');
+                      }
+                      // 3. Các nhãn/thuộc tính phổ biến của khu vực shop.
+                      if (!shop) {
+                        const nodes = [...document.querySelectorAll('[data-testid],[aria-label],[title],[class]')].filter(visible);
+                        const candidates = nodes.map(e => ({
+                          text: clean(e.innerText),
+                          meta: clean([e.getAttribute('data-testid'),e.getAttribute('aria-label'),e.getAttribute('title'),e.className].join(' '))
+                        })).filter(x => valid(x.text) &&
+                          /(shop.?name|seller.?name|shop.?info|shop.?header|seller.?info|shop.?name)/i.test(x.meta));
+                        shop = candidates.sort((a,b)=>a.text.length-b.text.length)[0]?.text || '';
+                      }
+                      // 4. Nội dung trang có nhãn Shop/Seller gần tên cửa hàng.
+                      if (!shop) {
+                        const lines = (document.body?.innerText || '').split(/\\n+/).map(clean).filter(Boolean);
+                        for (let i=0;i<lines.length;i++) {
+                          if (/^(shop|seller|cửa hàng|người bán)$/i.test(lines[i]) && valid(lines[i+1])) {
+                            shop=lines[i+1]; break;
+                          }
+                        }
+                      }
+                      return { shopName: valid(shop) ? clean(shop) : '' };
                     })();
                     """;
                     var raw = await browser.CoreWebView2.ExecuteScriptAsync(script);
