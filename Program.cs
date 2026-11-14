@@ -70,7 +70,11 @@ public sealed class MainForm : Form
         MinimumSize = new Size(1180, 760);
         StartPosition = FormStartPosition.CenterScreen;
 
-        var split = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 610, FixedPanel = FixedPanel.Panel1 };
+        var split = new SplitContainer
+        {
+            Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 760,
+            Panel1MinSize = 540, Panel2MinSize = 540, FixedPanel = FixedPanel.None, SplitterWidth = 6
+        };
         Controls.Add(split);
         BuildWorkspace(split.Panel1);
         BuildBrowser(split.Panel2);
@@ -150,7 +154,8 @@ public sealed class MainForm : Form
 
         panel.Controls.Add(LabelAt("2. Danh sách sản phẩm (tối đa 100)", 200));
         AddButton(panel, "Kiểm tra sản phẩm không thể mua", 12, 224, 578, CheckAvailabilityForAll);
-        table.SetBounds(12, 262, 578, 563);
+        table.SetBounds(12, 262, panel.ClientSize.Width - 24, 563);
+        table.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         table.ReadOnly = true;
         table.AllowUserToAddRows = false;
         table.MultiSelect = false;
@@ -165,19 +170,53 @@ public sealed class MainForm : Form
         table.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(ProductItem.Status), HeaderText = "Trạng thái", FillWeight = 65 });
         panel.Controls.Add(table);
 
-        AddButton(panel, "Mở link gốc đã chọn", 12, 835, 185, OpenSelectedProduct);
-        AddButton(panel, "Sao chép link Affiliate", 205, 835, 185, () => CopySelected(p => p.AffiliateUrl));
-        AddButton(panel, "Xuất CSV", 398, 835, 192, ExportCsv);
-        AddButton(panel, "Chỉ hiện sản phẩm không thể mua", 12, 870, 280, ToggleUnavailableFilter);
-        AddButton(panel, "Xuất DS không thể mua", 302, 870, 288, ExportUnavailableCsv);
+        var openButton = AddButton(panel, "Mở link gốc đã chọn", 12, 835, 185, OpenSelectedProduct);
+        var copyButton = AddButton(panel, "Sao chép link Affiliate", 205, 835, 185, () => CopySelected(p => p.AffiliateUrl));
+        var exportButton = AddButton(panel, "Xuất CSV", 398, 835, 192, ExportCsv);
+        var filterButton = AddButton(panel, "Chỉ hiện sản phẩm không thể mua", 12, 870, 280, ToggleUnavailableFilter);
+        var exportUnavailableButton = AddButton(panel, "Xuất DS không thể mua", 302, 870, 288, ExportUnavailableCsv);
 
         var note = new Label
         {
             Text = "Tự động tìm sản phẩm, kiểm tra khả năng mua và chỉ tạo link Affiliate cho sản phẩm còn mua được. CAPTCHA/OTP sẽ yêu cầu bạn xử lý.",
-            Left = 12, Top = 906, Width = 578, Height = 45,
+            Left = 12, Top = 906, Width = panel.ClientSize.Width - 24, Height = 45,
+            Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
             ForeColor = Color.DarkSlateGray
         };
         panel.Controls.Add(note);
+
+        panel.Resize += (_, _) =>
+        {
+            int contentWidth = Math.Max(200, panel.ClientSize.Width - 24);
+            keyword.Width = Math.Max(180, contentWidth - 365);
+            var searchButton = panel.Controls.OfType<Button>().FirstOrDefault(b => b.Text == "Tìm từ khóa");
+            var extractButton = panel.Controls.OfType<Button>().FirstOrDefault(b => b.Text == "Lấy sản phẩm đang hiển thị");
+            if (searchButton is not null) { searchButton.Left = keyword.Right + 8; searchButton.Width = 130; }
+            if (extractButton is not null) { extractButton.Left = searchButton?.Right + 8 ?? 0; extractButton.Width = Math.Max(130, panel.ClientSize.Width - extractButton.Left - 12); }
+
+            foreach (var button in panel.Controls.OfType<Button>())
+            {
+                if (button.Text == "AI Agent: tự tạo link Affiliate" || button.Text == "Kiểm tra sản phẩm không thể mua")
+                { button.Left = 12; button.Width = contentWidth; }
+                else if (button.Text == "Mở Shopee Affiliate")
+                { button.Left = 12; button.Width = (contentWidth - 10) / 2; }
+                else if (button.Text == "Mở Custom Link")
+                { button.Left = 22 + (contentWidth - 10) / 2; button.Width = (contentWidth - 10) / 2; }
+            }
+
+            table.Width = contentWidth;
+            int actionY = panel.ClientSize.Height - 145;
+            table.Height = Math.Max(260, actionY - table.Top - 10);
+            int third = (contentWidth - 20) / 3;
+            openButton.SetBounds(12, actionY, third, 32);
+            copyButton.SetBounds(18 + third, actionY, third, 32);
+            exportButton.SetBounds(24 + 2 * third, actionY, third, 32);
+            int half = (contentWidth - 10) / 2;
+            filterButton.SetBounds(12, actionY + 35, half, 32);
+            exportUnavailableButton.SetBounds(22 + half, actionY + 35, half, 32);
+            note.Top = actionY + 72;
+            note.Width = contentWidth;
+        };
     }
 
     private void BuildBrowser(Control panel)
@@ -192,11 +231,12 @@ public sealed class MainForm : Form
         Font = new Font("Segoe UI", 9, FontStyle.Bold)
     };
 
-    private void AddButton(Control parent, string text, int x, int y, int width, Action action)
+    private Button AddButton(Control parent, string text, int x, int y, int width, Action action)
     {
         var button = new Button { Text = text, Left = x, Top = y, Width = width, Height = 32 };
         button.Click += (_, _) => action();
         parent.Controls.Add(button);
+        return button;
     }
 
     private void Navigate(string url)
