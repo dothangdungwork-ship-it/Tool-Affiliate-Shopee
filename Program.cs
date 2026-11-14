@@ -46,7 +46,7 @@ public sealed class ProductItem
         AvailabilityStatus == "Chưa kiểm tra" ? "Đã có link" : AvailabilityStatus;
 }
 
-public sealed class MainForm : Form
+public sealed partial class MainForm : Form
 {
     private const int MaxProducts = 100;
     private readonly BindingList<ProductItem> items = new();
@@ -88,6 +88,7 @@ public sealed class MainForm : Form
         };
         Controls.Add(split);
         BuildWorkspace(split.Panel1);
+        InitializeZaloMenu();
         BuildBrowser(split.Panel2);
 
         status.Dock = DockStyle.Bottom;
