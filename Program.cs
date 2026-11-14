@@ -341,50 +341,55 @@ public sealed class MainForm : Form
                 (() => {
                   const visible = e => {
                     const r = e.getBoundingClientRect(), s = getComputedStyle(e);
-                    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                    return r.width > 0 && r.height > 0 && s.display !== 'none' &&
+                      s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
                   };
-                  const fields = [...document.querySelectorAll('input:not([type=hidden])')].filter(visible);
-                  // Nếu vẫn đang ở landing page, bấm CTA chính thức để mở luồng đăng nhập.
-                  const hasLoginFields = fields.some(e => e.type === 'password' ||
-                    /phone|email|username|account|số điện thoại|tài khoản/i.test(
-                      (e.placeholder || '') + ' ' + (e.name || '') + ' ' + (e.id || '') + ' ' + (e.getAttribute('aria-label') || '')));
-                  if (!hasLoginFields) {
-                    const cta = [...document.querySelectorAll('a,button,[role=button]')].find(e => {
-                      if (!visible(e)) return false;
-                      const t = (e.innerText || e.textContent || '').trim().toLowerCase();
-                      return /tham gia ngay|đăng nhập|login|join now|get started/i.test(t);
-                    });
-                    if (cta) {
-                      cta.click();
-                      return {ok:false, retry:true, message:'Đang mở luồng đăng nhập chính thức của Shopee. Vui lòng nhấn nút đăng nhập lại sau khi trang chuyển xong.'};
-                    }
+                  // Shopee có thể render form đăng nhập bên trong iframe.
+                  const roots = [document];
+                  for (const frame of [...document.querySelectorAll('iframe')]) {
+                    try { if (frame.contentDocument) roots.push(frame.contentDocument); } catch {}
                   }
+                  const all = (root, selector) => [...root.querySelectorAll(selector)];
+                  const fields = roots.flatMap(root => all(root, 'input:not([type=hidden])').filter(visible));
                   const meta = e => ((e.placeholder || '') + ' ' + (e.getAttribute('aria-label') || '') + ' ' +
-                    (e.name || '') + ' ' + (e.id || '') + ' ' + (e.parentElement?.innerText || '')).toLowerCase();
-                  const user = fields.filter(e => !/password|mật khẩu/i.test((e.type || '') + ' ' + meta(e)))
+                    (e.name || '') + ' ' + (e.id || '') + ' ' + (e.autocomplete || '') + ' ' +
+                    (e.parentElement?.innerText || '')).toLowerCase();
+                  const pass = fields.find(e => e.type === 'password' || /password|mật khẩu/i.test(meta(e)));
+                  const user = fields.filter(e => e !== pass && !/password|mật khẩu/i.test(meta(e)))
                     .sort((a,b) => {
-                      const score = e => /phone|email|username|account|số điện thoại|tài khoản|đăng nhập/i.test(meta(e)) ? 10 : 0;
+                      const score = e => /phone|email|username|account|số điện thoại|tài khoản/i.test(meta(e)) ? 10 : 0;
                       return score(b)-score(a);
                     })[0];
-                  const pass = fields.find(e => e.type === 'password' || /password|mật khẩu/i.test(meta(e)));
-                  if (!user || !pass) return {ok:false, message:'Chưa nhận diện được ô tài khoản và mật khẩu trên trang Shopee. Nếu Shopee đang hiển thị QR, hãy chuyển sang đăng nhập bằng mật khẩu rồi thử lại.'};
+                  if (!user || !pass) {
+                    const cta = roots.flatMap(root => all(root, 'a,button,[role=button]'))
+                      .find(e => visible(e) && /tham gia ngay|đăng nhập|log in|login|join now|get started/i
+                        .test((e.innerText || e.textContent || '').trim().toLowerCase()));
+                    if (cta) {
+                      cta.click();
+                      return {ok:false,retry:true,message:'Đang mở biểu mẫu đăng nhập Shopee. Vui lòng chờ trang chuyển.'};
+                    }
+                    return {ok:false,message:'Không tìm thấy hai ô tài khoản và mật khẩu trong trang hoặc iframe. Hãy kiểm tra trang đăng nhập đã tải xong.'};
+                  }
                   const set = (e,v) => {
-                    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+                    const win = e.ownerDocument.defaultView;
+                    const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype,'value')?.set;
                     if (setter) setter.call(e,v); else e.value = v;
-                    e.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'}));
-                    e.dispatchEvent(new Event('change',{bubbles:true}));
+                    e.dispatchEvent(new win.InputEvent('input',{bubbles:true,inputType:'insertText'}));
+                    e.dispatchEvent(new win.Event('change',{bubbles:true}));
                   };
                   set(user, __ACCOUNT__);
                   set(pass, __PASSWORD__);
-                  const buttons = [...document.querySelectorAll('button,[role=button],input[type=submit]')].filter(visible);
-                  const submit = buttons.find(e => /log in|login|đăng nhập/i.test((e.innerText || e.value || e.getAttribute('aria-label') || '').trim()));
+                  const root = pass.ownerDocument;
+                  const buttons = all(root,'button,[role=button],input[type=submit]').filter(visible);
+                  const submit = buttons.find(e => /log in|login|đăng nhập/i
+                    .test((e.innerText || e.value || e.getAttribute('aria-label') || '').trim()));
                   if (submit) submit.click();
                   else {
                     const form = pass.closest('form') || user.closest('form');
                     if (form) form.requestSubmit();
-                    else return {ok:false,message:'Đã điền thông tin nhưng không tìm thấy nút đăng nhập. Vui lòng kiểm tra trang Shopee.'};
+                    else return {ok:false,message:'Đã điền thông tin nhưng không tìm thấy nút đăng nhập. Vui lòng tự nhấn LOG IN trên trang Shopee.'};
                   }
-                  return {ok:true,message:'Đã gửi thông tin đăng nhập tới biểu mẫu Shopee chính thức.'};
+                  return {ok:true,message:'Đã điền và gửi thông tin tới biểu mẫu đăng nhập Shopee.'};
                 })();
                 """;
                 var filledScript = script.Replace("__ACCOUNT__", accountJson).Replace("__PASSWORD__", passwordJson);
