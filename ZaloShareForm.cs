@@ -10,7 +10,7 @@ public sealed partial class MainForm : Form
     {
         var menu = new MenuStrip();
         var zaloMenu = new ToolStripMenuItem("Zalo");
-        var sendItem = new ToolStripMenuItem("Gửi link Affiliate của sản phẩm đang chọn");
+        var sendItem = new ToolStripMenuItem("Gửi tin nhắn vào Zalo");
         sendItem.Click += (_, _) => OpenZaloForSelectedProducts();
         zaloMenu.DropDownItems.Add(sendItem);
         menu.Items.Add(zaloMenu);
@@ -19,8 +19,12 @@ public sealed partial class MainForm : Form
         menu.BringToFront();
     }
 
+    // Khi bấm nút trên giao diện chính, gọi thẳng vào luồng gửi tin nhắn Zalo
+    private void OpenZaloLogin() => OpenZaloForSelectedProducts();
+
     private void OpenZaloForSelectedProducts()
     {
+        // 1. Ưu tiên lấy các dòng đang được chọn (bôi đen) có sẵn link Affiliate
         var selected = table.SelectedRows
             .Cast<DataGridViewRow>()
             .Select(row => row.DataBoundItem as ProductItem)
@@ -29,29 +33,37 @@ public sealed partial class MainForm : Form
             .Distinct()
             .ToList();
 
+        // 2. Nếu không bôi đen nhiều dòng, lấy dòng hiện tại đang trỏ tới
         if (selected.Count == 0 && table.CurrentRow?.DataBoundItem is ProductItem current &&
             !string.IsNullOrWhiteSpace(current.AffiliateUrl))
+        {
             selected.Add(current);
+        }
 
+        // 3. Nếu vẫn trống, tự động lấy TẤT CẢ sản phẩm đã có link Affiliate trong bảng
         if (selected.Count == 0)
         {
-            MessageBox.Show(this,
-                "Hãy chọn ít nhất một sản phẩm đã có link Affiliate trước khi gửi Zalo.",
-                "Tool Affiliate", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
+            selected = items
+                .Where(item => !string.IsNullOrWhiteSpace(item.AffiliateUrl))
+                .ToList();
         }
 
-        var lines = new List<string> { "Mình chia sẻ một số sản phẩm Shopee:" };
-        foreach (var product in selected)
+        string initialMessage = "";
+        if (selected.Count > 0)
         {
+            var lines = new List<string> { "Mình chia sẻ một số sản phẩm Shopee:" };
+            foreach (var product in selected)
+            {
+                lines.Add("");
+                lines.Add("• " + (string.IsNullOrWhiteSpace(product.Name) ? "Sản phẩm Shopee" : product.Name.Trim()));
+                lines.Add(product.AffiliateUrl.Trim());
+            }
             lines.Add("");
-            lines.Add("• " + (string.IsNullOrWhiteSpace(product.Name) ? "Sản phẩm Shopee" : product.Name.Trim()));
-            lines.Add(product.AffiliateUrl.Trim());
+            lines.Add("Link sản phẩm tham khảo. Bạn xem thông tin và giá hiện tại trên Shopee nhé!");
+            initialMessage = string.Join(Environment.NewLine, lines);
         }
-        lines.Add("");
-        lines.Add("Link sản phẩm tham khảo. Bạn xem thông tin và giá hiện tại trên Shopee nhé!");
 
-        new ZaloShareForm(string.Join(Environment.NewLine, lines)).Show(this);
+        new ZaloShareForm(initialMessage).Show(this);
     }
 }
 
@@ -69,7 +81,7 @@ internal sealed class ZaloShareForm : Form
 
     public ZaloShareForm(string message)
     {
-        Text = "Tool Affiliate - Gửi link Affiliate qua Zalo";
+        Text = "Tool Affiliate - Gửi tin nhắn vào Zalo";
         Width = 1120;
         Height = 820;
         MinimumSize = new Size(850, 650);
@@ -80,17 +92,18 @@ internal sealed class ZaloShareForm : Form
             Dock = DockStyle.Top,
             Height = 48,
             Padding = new Padding(10, 7, 8, 4),
-            Text = "1) Đăng nhập Zalo nếu cần.  2) Mở đúng MỘT nhóm cần gửi.  3) Kiểm tra nội dung bên dưới.  4) Bấm GỬI TIN NHẮN để phần mềm tự điền và gửi vào nhóm đang mở."
+            Text = "1) Quét QR đăng nhập Zalo nếu lần đầu mở (phiên sẽ được lưu tự động).  2) Mở nhóm/người cần gửi.  3) Kiểm tra nội dung bên dưới và bấm GỬI TIN NHẮN."
         };
 
         zaloBrowser.Dock = DockStyle.Fill;
 
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 190, Padding = new Padding(10) };
-        var messageLabel = new Label { Text = "Nội dung tin nhắn (có thể chỉnh sửa):", Dock = DockStyle.Top, Height = 22 };
+        var messageLabel = new Label { Text = "Nội dung tin nhắn (có thể chỉnh sửa hoặc tự nhập thêm):", Dock = DockStyle.Top, Height = 22 };
         messageBox.Multiline = true;
         messageBox.ScrollBars = ScrollBars.Vertical;
         messageBox.Dock = DockStyle.Fill;
         messageBox.Font = new Font("Segoe UI", 9);
+        messageBox.PlaceholderText = "Nhập nội dung tin nhắn hoặc chọn sản phẩm đã có link Affiliate trước khi mở cửa sổ này...";
         messageBox.Text = message;
 
         var actions = new FlowLayoutPanel
@@ -105,8 +118,11 @@ internal sealed class ZaloShareForm : Form
         var copyButton = new Button { Text = "Sao chép nội dung", Width = 155, Height = 32 };
         copyButton.Click += (_, _) =>
         {
-            Clipboard.SetText(messageBox.Text);
-            statusLabel.Text = "Đã sao chép nội dung.";
+            if (!string.IsNullOrEmpty(messageBox.Text))
+            {
+                Clipboard.SetText(messageBox.Text);
+                statusLabel.Text = "Đã sao chép nội dung.";
+            }
         };
         actions.Controls.Add(sendButton);
         actions.Controls.Add(copyButton);
@@ -156,7 +172,7 @@ internal sealed class ZaloShareForm : Form
             zaloBrowser.CoreWebView2.NavigationCompleted += (_, args) =>
             {
                 statusLabel.Text = args.IsSuccess
-                    ? "Zalo Web đã tải. Đăng nhập và mở đúng một nhóm trước khi gửi."
+                    ? "Zalo Web đã sẵn sàng. Chọn cuộc trò chuyện và bấm GỬI TIN NHẮN."
                     : "Không tải được Zalo Web. Kiểm tra kết nối Internet.";
             };
             zaloBrowser.CoreWebView2.Navigate("https://chat.zalo.me/");
@@ -180,6 +196,7 @@ internal sealed class ZaloShareForm : Form
         if (string.IsNullOrWhiteSpace(messageBox.Text))
         {
             statusLabel.Text = "Nội dung tin nhắn đang trống.";
+            MessageBox.Show(this, "Nội dung tin nhắn đang trống. Hãy nhập nội dung hoặc tạo link Affiliate trước.", "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -195,8 +212,6 @@ internal sealed class ZaloShareForm : Form
         try
         {
             var normalizedText = messageBox.Text.Replace("\r\n", "\n").Replace("\r", "\n").Trim();
-            
-            // Lưu sẵn vào Clipboard hệ thống để lệnh Paste hoạt động nguyên khối 100%
             try { Clipboard.SetText(normalizedText); } catch { }
 
             var payload = JsonSerializer.Serialize(normalizedText);
@@ -221,7 +236,6 @@ internal sealed class ZaloShareForm : Form
 
             if (ok)
             {
-                // Đợi 450ms để Zalo nhận diện đầy đủ toàn bộ các dòng và tạo link preview trước khi bấm Gửi
                 await Task.Delay(450);
                 var triggerResult = await ExecuteInMainAndFramesAsync(BuildTriggerSendScript());
                 if (!string.IsNullOrWhiteSpace(triggerResult) && triggerResult != "null")
@@ -352,7 +366,6 @@ internal sealed class ZaloShareForm : Form
         editor.focus();
 
         if (editor.isContentEditable || editor.getAttribute('contenteditable') === 'true') {
-          // Xóa nội dung cũ đang có trong ô chat
           const selection = window.getSelection();
           const range = document.createRange();
           range.selectNodeContents(editor);
@@ -360,7 +373,6 @@ internal sealed class ZaloShareForm : Form
           selection.addRange(range);
           document.execCommand('delete', false, null);
 
-          // ƯU TIÊN SỐ 1: Giả lập sự kiện Paste nguyên khối để KHÔNG bị Zalo hiểu nhầm dấu \n là phím Enter gửi sớm!
           let pasted = false;
           try {
             const dt = new DataTransfer();
@@ -371,18 +383,16 @@ internal sealed class ZaloShareForm : Form
               clipboardData: dt
             });
             editor.dispatchEvent(pasteEvent);
-            pasted = (editor.innerText || '').includes('http');
+            pasted = (editor.innerText || '').includes('http') || (editor.innerText || '').trim().length >= msg.length / 2;
           } catch {}
 
-          // ƯU TIÊN SỐ 2: Gọi lệnh paste trực tiếp từ Clipboard hệ thống (đã được C# gán sẵn)
           if (!pasted) {
             try {
               document.execCommand('paste');
-              pasted = (editor.innerText || '').includes('http');
+              pasted = (editor.innerText || '').includes('http') || (editor.innerText || '').trim().length >= msg.length / 2;
             } catch {}
           }
 
-          // ƯU TIÊN SỐ 3: Nếu Paste không tự ăn, điền từng dòng bằng insertText kết hợp Shift+Enter để xuống dòng an toàn
           if (!pasted) {
             const lines = msg.split('\n');
             for (let i = 0; i < lines.length; i++) {
@@ -485,83 +495,4 @@ internal sealed class ZaloShareForm : Form
       }
     })();
     """;
-}
-
-
-public sealed partial class MainForm
-{
-    private void OpenZaloLogin()
-    {
-        using var login = new ZaloLoginForm();
-        login.ShowDialog(this);
-    }
-}
-
-internal sealed class ZaloLoginForm : Form
-{
-    private readonly WebView2 browser = new();
-    private readonly Label status = new();
-    private readonly string profilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ToolAffiliate", "ZaloProfile");
-    private bool initialized;
-
-    public ZaloLoginForm()
-    {
-        Text = "Đăng nhập Zalo bằng mã QR";
-        Width = 1100;
-        Height = 800;
-        MinimumSize = new Size(800, 600);
-        StartPosition = FormStartPosition.CenterParent;
-
-        var instruction = new Label
-        {
-            Dock = DockStyle.Top,
-            Height = 42,
-            Padding = new Padding(10, 8, 8, 4),
-            Text = "Đăng nhập Zalo bằng QR hoặc phương thức Zalo cung cấp. Phiên đăng nhập được lưu trên máy này để dùng lại."
-        };
-        browser.Dock = DockStyle.Fill;
-        status.Dock = DockStyle.Bottom;
-        status.Height = 28;
-        status.Padding = new Padding(8, 6, 0, 0);
-        status.Text = "Đang mở Zalo Web...";
-
-        Controls.Add(browser);
-        Controls.Add(status);
-        Controls.Add(instruction);
-
-        Shown += async (_, _) => await InitializeAsync();
-        FormClosed += (_, _) =>
-        {
-            try { browser.CoreWebView2?.Stop(); } catch { }
-            browser.Dispose();
-        };
-    }
-
-    private async Task InitializeAsync()
-    {
-        if (initialized) return;
-        initialized = true;
-        try
-        {
-            Directory.CreateDirectory(profilePath);
-            var environment = await CoreWebView2Environment.CreateAsync(null, profilePath);
-            await browser.EnsureCoreWebView2Async(environment);
-            browser.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
-            browser.CoreWebView2.Settings.IsStatusBarEnabled = true;
-            browser.CoreWebView2.NavigationCompleted += (_, args) =>
-            {
-                status.Text = args.IsSuccess
-                    ? "Zalo Web đã mở. Quét mã QR để đăng nhập nếu được yêu cầu."
-                    : "Không tải được Zalo Web. Hãy kiểm tra Internet.";
-            };
-            browser.CoreWebView2.Navigate("https://chat.zalo.me/");
-        }
-        catch (Exception ex)
-        {
-            status.Text = "Không thể khởi tạo Zalo Web: " + ex.Message;
-            MessageBox.Show(this, status.Text, "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
-    }
 }
