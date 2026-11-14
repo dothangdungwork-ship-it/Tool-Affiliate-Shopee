@@ -387,12 +387,20 @@ public sealed class MainForm : Form
                   return {ok:true,message:'Đã gửi thông tin đăng nhập tới biểu mẫu Shopee chính thức.'};
                 })();
                 """;
-                var raw = await browser.CoreWebView2.ExecuteScriptAsync(
-                    script.Replace("__ACCOUNT__", accountJson).Replace("__PASSWORD__", passwordJson));
-                using var result = JsonDocument.Parse(raw);
-                var root = result.RootElement;
-                var ok = root.TryGetProperty("ok", out var okValue) && okValue.GetBoolean();
-                var message = root.TryGetProperty("message", out var msgValue) ? msgValue.GetString() : "Không có phản hồi từ trang Shopee.";
+                var filledScript = script.Replace("__ACCOUNT__", accountJson).Replace("__PASSWORD__", passwordJson);
+                string message = "Không có phản hồi từ trang Shopee.";
+                bool ok = false;
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    var raw = await browser.CoreWebView2.ExecuteScriptAsync(filledScript);
+                    using var result = JsonDocument.Parse(raw);
+                    var root = result.RootElement;
+                    ok = root.TryGetProperty("ok", out var okValue) && okValue.GetBoolean();
+                    message = root.TryGetProperty("message", out var msgValue) ? msgValue.GetString() ?? message : message;
+                    var retry = root.TryGetProperty("retry", out var retryValue) && retryValue.GetBoolean();
+                    if (ok || !retry) break;
+                    await Task.Delay(1800);
+                }
                 password.Clear();
                 if (ok)
                 {
