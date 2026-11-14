@@ -41,6 +41,11 @@ public sealed class ProductItem
     public string Name { get; set; } = "";
     public string ProductUrl { get; set; } = "";
     public string AffiliateUrl { get; set; } = "";
+    public string ShopName { get; set; } = "";
+    public string ListedPrice { get; set; } = "";
+    public string PublicVoucherPrice { get; set; } = "";
+    public string AccountVoucherPrice { get; set; } = "";
+    public string VoucherInfo { get; set; } = "";
     public string AvailabilityStatus { get; set; } = "Chưa kiểm tra";
     public string Status => string.IsNullOrWhiteSpace(AffiliateUrl) ? "Chờ tạo link" :
         AvailabilityStatus == "Chưa kiểm tra" ? "Đã có link" : AvailabilityStatus;
