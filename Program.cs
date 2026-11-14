@@ -99,15 +99,14 @@ public sealed class MainForm : Form
         panel.Padding = new Padding(12);
         var heading = new Label
         {
-            Text = "SHOPEE AFFILIATE AGENT V3",
+            Text = "SHOPEE AFFILIATE AGENT V4",
             Font = new Font("Segoe UI", 16, FontStyle.Bold),
             Dock = DockStyle.Top,
             Height = 42
         };
         panel.Controls.Add(heading);
 
-        var searchLabel = LabelAt("1. Tìm sản phẩm theo từ khóa", 48);
-        panel.Controls.Add(searchLabel);
+        panel.Controls.Add(LabelAt("1. Tìm sản phẩm theo từ khóa", 48));
         keyword.SetBounds(12, 76, 245, 30);
         keyword.PlaceholderText = "Ví dụ: bàn phím cơ, RTX 5060...";
         panel.Controls.Add(keyword);
@@ -159,7 +158,7 @@ public sealed class MainForm : Form
 
         var note = new Label
         {
-            Text = "An toàn: ứng dụng không đọc cookie, không gọi API nội bộ và không tự thao tác tài khoản. Bạn tự đăng nhập và tạo link trong Custom Link; V3 chỉ quản lý hàng đợi, ghép kết quả, lưu cục bộ và xuất CSV.",
+            Text = "V4: tự đọc tên và URL sản phẩm từ kết quả tìm kiếm đang hiển thị trong Shopee, loại trùng và lưu cục bộ. Chức năng tạo link Affiliate tự động qua giao diện Custom Link đang được phát triển; hiện vẫn cần tạo link trên trang chính thức và dán kết quả vào đây. Ứng dụng không đọc/xuất cookie hoặc gọi API nội bộ.",
             Left = 12, Top = 875, Width = 578, Height = 58,
             ForeColor = Color.DarkSlateGray
         };
@@ -235,7 +234,8 @@ public sealed class MainForm : Form
         try
         {
             var raw = await browser.CoreWebView2.ExecuteScriptAsync(script);
-            var products = JsonSerializer.Deserialize<List<VisibleProduct>>(raw) ?? new();
+            var products = JsonSerializer.Deserialize<List<VisibleProduct>>(raw,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
             if (products.Count == 0)
             {
                 MessageBox.Show("Không tìm thấy sản phẩm trong nội dung đang hiển thị. Hãy mở trang kết quả Shopee, chờ tải xong và thử lại.");
@@ -376,7 +376,7 @@ public sealed class MainForm : Form
 
     private void ExportCsv()
     {
-        using var dialog = new SaveFileDialog { Filter = "CSV UTF-8 (*.csv)|*.csv", FileName = "Shopee_Affiliate_V3.csv" };
+        using var dialog = new SaveFileDialog { Filter = "CSV UTF-8 (*.csv)|*.csv", FileName = "Shopee_Affiliate_V4.csv" };
         if (dialog.ShowDialog() != DialogResult.OK) return;
         var csv = new StringBuilder();
         csv.AppendLine("STT,Ten san pham,Product URL,Affiliate URL,Trang thai");
