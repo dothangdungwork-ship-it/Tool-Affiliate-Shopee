@@ -240,10 +240,19 @@ public sealed class MainForm : Form
         if (urls.Count == 0) { MessageBox.Show("Dán ít nhất một link Affiliate."); return; }
 
         var pending = items.Where(p => string.IsNullOrWhiteSpace(p.AffiliateUrl)).ToList();
-        int assigned = 0, skipped = 0;
+        if (urls.Any(url => !IsAffiliateUrl(url)))
+        {
+            MessageBox.Show("Có dòng không phải link Shopee HTTPS hợp lệ. Chưa gắn link nào; hãy sửa danh sách rồi thử lại.");
+            return;
+        }
+        if (urls.Count > pending.Count)
+        {
+            MessageBox.Show($"Có {pending.Count} sản phẩm đang chờ nhưng bạn dán {urls.Count} link. Chưa gắn link nào để tránh lệch thứ tự.");
+            return;
+        }
+        int assigned = 0;
         foreach (var url in urls)
         {
-            if (!IsAffiliateUrl(url) || assigned >= pending.Count) { skipped++; continue; }
             pending[assigned].AffiliateUrl = url;
             assigned++;
         }
@@ -251,7 +260,7 @@ public sealed class MainForm : Form
         SaveData();
         UpdateStatus();
         bulkAffiliates.Clear();
-        MessageBox.Show($"Đã gắn {assigned} link theo thứ tự các sản phẩm đang chờ. Bỏ qua {skipped} dòng.\nVui lòng kiểm tra lại từng cặp link trước khi sử dụng.");
+        MessageBox.Show($"Đã gắn {assigned} link theo thứ tự các sản phẩm đang chờ. Vui lòng kiểm tra lại từng cặp link trước khi sử dụng.");
     }
 
     private void RemoveSelected()
@@ -353,7 +362,9 @@ public sealed class MainForm : Form
         uri.Scheme == Uri.UriSchemeHttps &&
         (uri.Host.Equals("shopee.vn", StringComparison.OrdinalIgnoreCase) ||
          uri.Host.EndsWith(".shopee.vn", StringComparison.OrdinalIgnoreCase)) &&
-        !uri.Host.Equals("affiliate.shopee.vn", StringComparison.OrdinalIgnoreCase);
+        !uri.Host.Equals("affiliate.shopee.vn", StringComparison.OrdinalIgnoreCase) &&
+        (uri.AbsolutePath.Contains("/product/", StringComparison.OrdinalIgnoreCase) ||
+         System.Text.RegularExpressions.Regex.IsMatch(uri.AbsolutePath, @"-i\.\d+\.\d+"));
 
     private static bool IsAffiliateUrl(string value)
     {
