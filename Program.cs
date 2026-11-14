@@ -733,9 +733,16 @@ public sealed class MainForm : Form
                     else if (/(product url|đường dẫn sản phẩm|url sản phẩm)/i.test(meta)) score = 80;
                     return { e, score, area: e.getBoundingClientRect().width * e.getBoundingClientRect().height };
                   }).sort((a,b) => b.score-a.score || b.area-a.area);
-                  const field = scored[0]?.e;
-                  if (!field || scored[0].score < 80)
-                    return { ok:false, message:'Không tìm thấy ô nhập URL sản phẩm. Hãy kiểm tra Custom Link đã tải đầy đủ và thử tải lại trang.' };
+                  const field = scored[0]?.score >= 80
+                    ? scored[0].e
+                    : [...document.querySelectorAll('textarea')].filter(visible)
+                        .sort((a,b) => (b.getBoundingClientRect().width*b.getBoundingClientRect().height) -
+                                       (a.getBoundingClientRect().width*a.getBoundingClientRect().height))[0]
+                      || fields.filter(e => visible(e) && e.tagName === 'TEXTAREA')
+                        .sort((a,b) => (b.getBoundingClientRect().width*b.getBoundingClientRect().height) -
+                                       (a.getBoundingClientRect().width*a.getBoundingClientRect().height))[0];
+                  if (!field)
+                    return { ok:false, retry:true, message:'Ô nhập URL Custom Link chưa xuất hiện; đang chờ Shopee tải trang.' };
                   field.focus();
                   const proto = field.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
                   const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
@@ -758,10 +765,19 @@ public sealed class MainForm : Form
                 })();
                 """;
                 var safeProductUrl = JsonSerializer.Serialize(product.ProductUrl);
-                var raw = await browser.CoreWebView2.ExecuteScriptAsync(
-                    submitScript.Replace("__PRODUCT_URL_JSON__", safeProductUrl));
-                var submit = JsonSerializer.Deserialize<AgentLinkResult>(raw,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                string raw = "";
+                AgentLinkResult? submit = null;
+                for (int fieldAttempt = 0; fieldAttempt < 12; fieldAttempt++)
+                {
+                    await Task.Delay(650);
+                    raw = await browser.CoreWebView2.ExecuteScriptAsync(
+                        submitScript.Replace("__PRODUCT_URL_JSON__", safeProductUrl));
+                    submit = JsonSerializer.Deserialize<AgentLinkResult>(raw,
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (submit?.Ok == true) break;
+                    if (submit?.Message?.Contains("Ô nhập URL Custom Link chưa xuất hiện", StringComparison.OrdinalIgnoreCase) != true)
+                        break;
+                }
                 if (submit is null || !submit.Ok)
                 {
                     MessageBox.Show($"Agent đã dừng ở sản phẩm {completed + 1}/{pending.Count}.\\n{product.Name}\\n{submit?.Message ?? "Không nhận được xác nhận từ trang Custom Link."}\\n\\nCác link đã tạo trước đó đã được lưu; sản phẩm này chưa được đánh dấu hoàn tất.");
