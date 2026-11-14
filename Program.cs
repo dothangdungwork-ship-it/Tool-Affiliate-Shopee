@@ -1075,60 +1075,73 @@ public sealed class MainForm : Form
             for (int i = 0; i < targets.Count; i++)
             {
                 var item = targets[i];
-                status.Text = $"Đang đọc tên shop {i + 1}/{targets.Count}: {item.Name}";
+                status.Text = $"Đang tra cứu shop {i + 1}/{targets.Count}: {item.Name}";
                 try
                 {
-                    await NavigateAndWaitAsync(item.ProductUrl, 30000);
-                    await Task.Delay(1100);
-                    const string script = """
-                    (() => {
-                      const clean = s => (s || '').replace(/\s+/g,' ').trim();
-                      const valid = s => {
-                        s=clean(s);
-                        return s.length>=2 && s.length<=100 &&
-                          !/^(shop|cửa hàng|xem shop|xem cửa hàng|chat ngay|đánh giá|sản phẩm)$/i.test(s);
-                      };
-                      const body = document.body?.innerText || '';
-                      let shop = '';
+                    // Shopee product URLs encode seller ID and item ID as .i.<shopid>.<itemid>.
+                    var match = System.Text.RegularExpressions.Regex.Match(
+                        item.ProductUrl ?? "", @"\.i\.(\d+)\.(\d+)");
+                    if (!match.Success)
+                        throw new InvalidOperationException("Link sản phẩm không chứa mã shop/item Shopee.");
+                    var shopId = match.Groups[1].Value;
+                    var itemId = match.Groups[2].Value;
 
-                      // Trên trang sản phẩm Shopee, seller block hiển thị dạng:
-                      // "TMINSVN Online 2 phút trước Xem Shop 1,5K Sản phẩm..."
-                      const patterns = [
-                        /([^\n]{2,100}?)\s+\d+\s*(?:giây|phút|giờ|ngày)\s+trước\s+Xem Shop/i,
-                        /([^\n]{2,100}?)\s+Xem Shop\s+\d[\d.,]*\s*Sản phẩm/i,
-                        /([^\n]{2,100}?)\s+Xem Shop/i
+                    await NavigateAndWaitAsync("https://shopee.vn/", 30000);
+                    await Task.Delay(500);
+
+                    var shopJson = JsonSerializer.Serialize(shopId);
+                    var itemJson = JsonSerializer.Serialize(itemId);
+                    var script = """
+                    (async () => {
+                      const shopId = __SHOP_ID__;
+                      const itemId = __ITEM_ID__;
+                      const headers = {
+                        'accept': 'application/json, text/plain, */*',
+                        'x-requested-with': 'XMLHttpRequest'
+                      };
+                      const urls = [
+                        '/api/v4/shop/get?shopid=' + encodeURIComponent(shopId),
+                        '/api/v4/item/get?shopid=' + encodeURIComponent(shopId) + '&itemid=' + encodeURIComponent(itemId)
                       ];
-                      for (const pattern of patterns) {
-                        const match = body.match(pattern);
-                        if (match && valid(match[1])) {
-                          shop = clean(match[1]);
-                          break;
+                      const results = [];
+                      for (const path of urls) {
+                        try {
+                          const response = await fetch(path, { credentials:'include', headers });
+                          const json = await response.json();
+                          results.push({path, status:response.status, data:json?.data || null});
+                          const data = json?.data || {};
+                          const name = data.name || data.shop_name || data.username ||
+                            data.shop?.name || data.shop?.username || '';
+                          if (name) return {shopName:String(name), source:path, debug:results};
+                        } catch (error) {
+                          results.push({path, error:String(error)});
                         }
                       }
-
-                      // Fallback lấy text của liên kết shop, nếu Shopee render link riêng.
-                      if (!shop) {
-                        const links = [...document.querySelectorAll('a[href]')].map(a => ({
-                          href: a.getAttribute('href') || '',
-                          text: clean(a.innerText || a.textContent)
-                        })).filter(x => /shop|seller/i.test(x.href) && valid(x.text));
-                        if (links.length) shop = links.sort((a,b)=>b.text.length-a.text.length)[0].text;
-                      }
-                      return { shopName: valid(shop) ? shop : '', bodyHasXemShop: /Xem Shop/i.test(body) };
+                      return {shopName:'', debug:results};
                     })();
-                    """;
+                    """.Replace("__SHOP_ID__", shopJson).Replace("__ITEM_ID__", itemJson);
+
                     var raw = await browser.CoreWebView2.ExecuteScriptAsync(script);
                     using var doc = JsonDocument.Parse(raw);
                     item.ShopName = GetJsonString(doc.RootElement, "shopName");
-                    if (string.IsNullOrWhiteSpace(item.ShopName)) failed++;
+                    if (string.IsNullOrWhiteSpace(item.ShopName))
+                    {
+                        failed++;
+                        var debug = doc.RootElement.TryGetProperty("debug", out var d) ? d.ToString() : "không có dữ liệu";
+                        status.Text = $"Không lấy được tên shop cho {item.Name}. Phản hồi Shopee: {debug}";
+                    }
                     else read++;
                 }
-                catch { failed++; }
+                catch (Exception ex)
+                {
+                    failed++;
+                    status.Text = $"Lỗi đọc shop {item.Name}: {ex.Message}";
+                }
                 RefreshTable();
                 SaveData();
             }
-            status.Text = $"Đã đọc tên shop {read}/{targets.Count}; {failed} sản phẩm chưa lấy được tên shop.";
-            MessageBox.Show($"Đã đọc được tên shop của {read}/{targets.Count} sản phẩm.\nMột số trang có thể không hiển thị tên shop hoặc bị Shopee giới hạn truy cập.");
+            status.Text = $"Đã đọc tên shop {read}/{targets.Count}; {failed} sản phẩm chưa lấy được.";
+            MessageBox.Show($"Đã lấy được tên shop {read}/{targets.Count} sản phẩm.\\nNếu vẫn trống, trạng thái sẽ cho biết Shopee chặn API hay link thiếu mã shop.");
         }
         catch (Exception ex)
         {
