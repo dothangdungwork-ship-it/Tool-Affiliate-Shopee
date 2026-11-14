@@ -599,7 +599,7 @@ public sealed class MainForm : Form
                     await Task.Delay(1300);
                     const string inspectScript = """
                     (() => {
-                      const text = (document.body?.innerText || '').toLowerCase().replace(/\\s+/g, ' ');
+                      const text = (document.body?.innerText || '').toLowerCase().replace(/\s+/g, ' ');
                       const title = (document.title || '').toLowerCase();
                       const has = terms => terms.some(t => text.includes(t) || title.includes(t));
                       if (has(['sản phẩm không tồn tại','không tìm thấy sản phẩm','sản phẩm này không tồn tại','sản phẩm đã bị xóa','sản phẩm đã bị ẩn','this product is unavailable','product not found','item not found','page not found']))
