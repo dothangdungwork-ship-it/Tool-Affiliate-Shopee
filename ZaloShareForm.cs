@@ -7,6 +7,14 @@ using Microsoft.Web.WebView2.WinForms;
 
 namespace ToolAffiliate
 {
+    public sealed class FbGroupEntry
+    {
+        public string Name { get; set; } = "";
+        public string Url { get; set; } = "";
+        public bool Checked { get; set; }
+        public override string ToString() => string.IsNullOrWhiteSpace(Name) ? Url : $"{Name} | {Url}";
+    }
+
     public sealed class AddlivetagConfig
     {
         public string ApiKey { get; set; } = "";
@@ -19,6 +27,7 @@ namespace ToolAffiliate
         public int MaxDelaySeconds { get; set; } = 30;
         public List<string> SavedGroups { get; set; } = new();
         public List<string> CheckedGroups { get; set; } = new();
+        public List<FbGroupEntry> FbGroups { get; set; } = new();
     }
 
     public sealed class SaleDealItem
@@ -79,7 +88,10 @@ namespace ToolAffiliate
     internal sealed class ZaloShareForm : Form
     {
         private static readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(25) };
+        private readonly TabControl browserTabs = new();
         private readonly WebView2 zaloBrowser = new();
+        private readonly WebView2 fbBrowser = new();
+
         private readonly TextBox apiKeyBox = new();
         private readonly TextBox affIdBox = new();
         private readonly TextBox subIdBox = new();
@@ -87,20 +99,28 @@ namespace ToolAffiliate
         private readonly NumericUpDown batchCountInput = new();
         private readonly NumericUpDown cycleMinutesInput = new();
         private readonly TextBox messageBox = new();
-        private readonly CheckedListBox groupsCheckList = new();
-        private readonly TextBox manualGroupInput = new();
+
+        private readonly CheckedListBox zaloGroupsCheckList = new();
+        private readonly TextBox manualZaloGroupInput = new();
+
+        private readonly CheckedListBox fbGroupsCheckList = new();
+        private readonly TextBox manualFbGroupInput = new();
+
         private readonly NumericUpDown minDelayInput = new();
         private readonly NumericUpDown maxDelayInput = new();
         private readonly Label statusLabel = new();
-        private readonly List<CoreWebView2Frame> frames = new();
+        private readonly List<CoreWebView2Frame> zaloFrames = new();
         private readonly HashSet<string> sentItemIds = new(StringComparer.OrdinalIgnoreCase);
 
-        private readonly string profilePath = Path.Combine(
+        private readonly string zaloProfilePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ToolAffiliate", "ZaloProfile");
+        private readonly string fbProfilePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ToolAffiliate", "FacebookProfile");
         private readonly string configFilePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ToolAffiliate", "addlivetag-config-v3.json");
+            "ToolAffiliate", "addlivetag-config-v4.json");
 
         private bool initialized;
         private bool autoPilotRunning;
@@ -109,18 +129,30 @@ namespace ToolAffiliate
 
         public ZaloShareForm(string message)
         {
-            Text = "Tool Affiliate - Gửi Tin Nhắn Zalo Tự Động (Quét & Tích Chọn Nhóm)";
-            Width = 1280;
-            Height = 900;
-            MinimumSize = new Size(1040, 740);
+            Text = "Tool Affiliate - Tự Động Gửi Zalo & Đăng Nhóm Facebook (Addlivetag Auto)";
+            Width = 1340;
+            Height = 920;
+            MinimumSize = new Size(1080, 760);
             StartPosition = FormStartPosition.CenterParent;
 
+            browserTabs.Dock = DockStyle.Fill;
+            browserTabs.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+
+            var zaloTabPage = new TabPage("💬 Trình duyệt Zalo Web");
             zaloBrowser.Dock = DockStyle.Fill;
+            zaloTabPage.Controls.Add(zaloBrowser);
+
+            var fbTabPage = new TabPage("📘 Trình duyệt Facebook (Đăng Nhóm)");
+            fbBrowser.Dock = DockStyle.Fill;
+            fbTabPage.Controls.Add(fbBrowser);
+
+            browserTabs.TabPages.Add(zaloTabPage);
+            browserTabs.TabPages.Add(fbTabPage);
 
             var bottom = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 350,
+                Height = 360,
                 Padding = new Padding(10, 8, 10, 6),
                 BackColor = Color.FromArgb(246, 248, 252)
             };
@@ -153,11 +185,11 @@ namespace ToolAffiliate
 
             var lblDelay1 = new Label { Text = "Nghỉ chống spam:", Left = 592, Top = 38, Width = 115 };
             minDelayInput.SetBounds(712, 35, 52, 25);
-            minDelayInput.Minimum = 5; minDelayInput.Maximum = 600; minDelayInput.Value = 15;
+            minDelayInput.Minimum = 5; minDelayInput.Maximum = 600; minDelayInput.Value = 20;
 
             var lblDelay2 = new Label { Text = "đến", Left = 769, Top = 38, Width = 30 };
             maxDelayInput.SetBounds(800, 35, 52, 25);
-            maxDelayInput.Minimum = 5; maxDelayInput.Maximum = 600; maxDelayInput.Value = 30;
+            maxDelayInput.Minimum = 5; maxDelayInput.Maximum = 600; maxDelayInput.Value = 40;
 
             var lblDelay3 = new Label { Text = "giây/nhóm", Left = 858, Top = 38, Width = 80 };
 
@@ -177,7 +209,7 @@ namespace ToolAffiliate
 
             var msgLabel = new Label
             {
-                Text = "Nội dung tin nhắn sẽ gửi:",
+                Text = "Nội dung gửi Zalo & đăng Nhóm Facebook:",
                 Dock = DockStyle.Top,
                 Height = 22,
                 Font = new Font("Segoe UI", 9, FontStyle.Bold)
@@ -190,51 +222,57 @@ namespace ToolAffiliate
             splitBottom.Panel1.Controls.Add(messageBox);
             splitBottom.Panel1.Controls.Add(msgLabel);
 
-            var grpTopPanel = new Panel { Dock = DockStyle.Top, Height = 28 };
-            var grpLabel = new Label
-            {
-                Text = "Tích chọn NHÓM Zalo:",
-                Dock = DockStyle.Left,
-                Width = 145,
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-                Padding = new Padding(0, 5, 0, 0)
-            };
-            var loadGroupsBtn = new Button
-            {
-                Text = "🔄 Quét toàn bộ Nhóm",
-                Dock = DockStyle.Right,
-                Width = 155,
-                Height = 26,
-                BackColor = Color.FromArgb(225, 240, 255)
-            };
-            var addCurrentChatBtn = new Button
-            {
-                Text = "➕ Thêm nhóm đang mở",
-                Dock = DockStyle.Right,
-                Width = 155,
-                Height = 26,
-                BackColor = Color.FromArgb(220, 248, 228)
-            };
-            grpTopPanel.Controls.Add(addCurrentChatBtn);
-            grpTopPanel.Controls.Add(loadGroupsBtn);
-            grpTopPanel.Controls.Add(grpLabel);
+            var targetTabs = new TabControl { Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8.5f, FontStyle.Bold) };
+            var zaloGroupsTab = new TabPage("💬 Tích chọn Nhóm Zalo");
+            var fbGroupsTab = new TabPage("📘 Tích chọn Nhóm Facebook");
 
-            var grpInputPanel = new Panel { Dock = DockStyle.Bottom, Height = 28, Padding = new Padding(0, 2, 0, 0) };
-            manualGroupInput.Dock = DockStyle.Fill;
-            manualGroupInput.PlaceholderText = "Hoặc gõ tên nhóm vào đây rồi bấm Thêm...";
-            var addManualBtn = new Button { Text = "Thêm", Dock = DockStyle.Right, Width = 65, Height = 25 };
-            var removeUncheckedBtn = new Button { Text = "Xóa dòng bỏ tích", Dock = DockStyle.Right, Width = 115, Height = 25 };
-            grpInputPanel.Controls.Add(manualGroupInput);
-            grpInputPanel.Controls.Add(addManualBtn);
-            grpInputPanel.Controls.Add(removeUncheckedBtn);
+            var zaloGrpTop = new Panel { Dock = DockStyle.Top, Height = 28 };
+            var loadZaloBtn = new Button { Text = "🔄 Quét Nhóm Zalo", Dock = DockStyle.Right, Width = 145, Height = 26, BackColor = Color.FromArgb(225, 240, 255) };
+            var addOpenZaloBtn = new Button { Text = "➕ Thêm nhóm đang mở", Dock = DockStyle.Left, Width = 160, Height = 26, BackColor = Color.FromArgb(220, 248, 228) };
+            zaloGrpTop.Controls.Add(loadZaloBtn);
+            zaloGrpTop.Controls.Add(addOpenZaloBtn);
 
-            groupsCheckList.Dock = DockStyle.Fill;
-            groupsCheckList.CheckOnClick = true;
-            groupsCheckList.Font = new Font("Segoe UI", 9);
+            var zaloGrpInputPanel = new Panel { Dock = DockStyle.Bottom, Height = 28, Padding = new Padding(0, 2, 0, 0) };
+            manualZaloGroupInput.Dock = DockStyle.Fill;
+            manualZaloGroupInput.PlaceholderText = "Gõ tên nhóm Zalo rồi bấm Thêm...";
+            var addManualZaloBtn = new Button { Text = "Thêm", Dock = DockStyle.Right, Width = 60, Height = 25 };
+            var cleanZaloBtn = new Button { Text = "Xóa bỏ tích", Dock = DockStyle.Right, Width = 95, Height = 25 };
+            zaloGrpInputPanel.Controls.Add(manualZaloGroupInput);
+            zaloGrpInputPanel.Controls.Add(addManualZaloBtn);
+            zaloGrpInputPanel.Controls.Add(cleanZaloBtn);
 
-            splitBottom.Panel2.Controls.Add(groupsCheckList);
-            splitBottom.Panel2.Controls.Add(grpInputPanel);
-            splitBottom.Panel2.Controls.Add(grpTopPanel);
+            zaloGroupsCheckList.Dock = DockStyle.Fill;
+            zaloGroupsCheckList.CheckOnClick = true;
+            zaloGroupsCheckList.Font = new Font("Segoe UI", 9, FontStyle.Regular);
+            zaloGroupsTab.Controls.Add(zaloGroupsCheckList);
+            zaloGroupsTab.Controls.Add(zaloGrpInputPanel);
+            zaloGroupsTab.Controls.Add(zaloGrpTop);
+
+            var fbGrpTop = new Panel { Dock = DockStyle.Top, Height = 28 };
+            var loadFbBtn = new Button { Text = "🔄 Quét Nhóm FB đã tham gia", Dock = DockStyle.Right, Width = 185, Height = 26, BackColor = Color.FromArgb(225, 240, 255) };
+            var addOpenFbBtn = new Button { Text = "➕ Thêm nhóm FB đang mở", Dock = DockStyle.Left, Width = 175, Height = 26, BackColor = Color.FromArgb(220, 248, 228) };
+            fbGrpTop.Controls.Add(loadFbBtn);
+            fbGrpTop.Controls.Add(addOpenFbBtn);
+
+            var fbGrpInputPanel = new Panel { Dock = DockStyle.Bottom, Height = 28, Padding = new Padding(0, 2, 0, 0) };
+            manualFbGroupInput.Dock = DockStyle.Fill;
+            manualFbGroupInput.PlaceholderText = "Dán link nhóm FB (https://www.facebook.com/groups/...) rồi bấm Thêm...";
+            var addManualFbBtn = new Button { Text = "Thêm", Dock = DockStyle.Right, Width = 60, Height = 25 };
+            var cleanFbBtn = new Button { Text = "Xóa bỏ tích", Dock = DockStyle.Right, Width = 95, Height = 25 };
+            fbGrpInputPanel.Controls.Add(manualFbGroupInput);
+            fbGrpInputPanel.Controls.Add(addManualFbBtn);
+            fbGrpInputPanel.Controls.Add(cleanFbBtn);
+
+            fbGroupsCheckList.Dock = DockStyle.Fill;
+            fbGroupsCheckList.CheckOnClick = true;
+            fbGroupsCheckList.Font = new Font("Segoe UI", 9, FontStyle.Regular);
+            fbGroupsTab.Controls.Add(fbGroupsCheckList);
+            fbGroupsTab.Controls.Add(fbGrpInputPanel);
+            fbGroupsTab.Controls.Add(fbGrpTop);
+
+            targetTabs.TabPages.Add(zaloGroupsTab);
+            targetTabs.TabPages.Add(fbGroupsTab);
+            splitBottom.Panel2.Controls.Add(targetTabs);
 
             var actions = new FlowLayoutPanel
             {
@@ -245,36 +283,45 @@ namespace ToolAffiliate
                 Padding = new Padding(0, 6, 0, 0)
             };
 
-            var autoPilotBtn = new Button
+            var autoBothBtn = new Button
             {
-                Text = "🚀 BẬT ZALO TỰ ĐỘNG (LẶP LẠI THEO CHU KỲ)",
-                Width = 330,
+                Text = "🚀 BẬT AUTO CẢ ZALO + FACEBOOK (LẶP LẠI)",
+                Width = 310,
                 Height = 32,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
                 BackColor = Color.FromArgb(210, 245, 218)
             };
 
-            var sendOnceBtn = new Button
+            var sendZaloOnceBtn = new Button
             {
-                Text = "⚡ Gửi ngay vào nhóm đã tích",
-                Width = 205,
+                Text = "⚡ Gửi ngay Zalo",
+                Width = 135,
                 Height = 32,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
                 BackColor = Color.FromArgb(255, 242, 204)
+            };
+
+            var sendFbOnceBtn = new Button
+            {
+                Text = "📘 Đăng ngay Nhóm FB",
+                Width = 165,
+                Height = 32,
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
+                BackColor = Color.FromArgb(218, 232, 255)
             };
 
             var fetchPreviewBtn = new Button
             {
-                Text = "🔄 Lấy link Sale từ API",
-                Width = 165,
+                Text = "🔄 Lấy Sale từ API",
+                Width = 140,
                 Height = 32,
-                BackColor = Color.FromArgb(228, 240, 255)
+                BackColor = Color.FromArgb(235, 242, 250)
             };
 
             var stopBtn = new Button
             {
                 Text = "⏹ Dừng",
-                Width = 100,
+                Width = 95,
                 Height = 32,
                 Enabled = false,
                 BackColor = Color.FromArgb(255, 228, 228)
@@ -282,26 +329,67 @@ namespace ToolAffiliate
 
             LoadSavedConfig();
 
-            loadGroupsBtn.Click += async (_, _) => await LoadGroupsFromZaloAsync();
-            addCurrentChatBtn.Click += async (_, _) => await AddCurrentOpenGroupAsync();
-            addManualBtn.Click += (_, _) =>
+            loadZaloBtn.Click += async (_, _) =>
             {
-                var name = manualGroupInput.Text.Trim();
+                browserTabs.SelectedIndex = 0;
+                await LoadGroupsFromZaloAsync();
+            };
+            addOpenZaloBtn.Click += async (_, _) =>
+            {
+                browserTabs.SelectedIndex = 0;
+                await AddCurrentOpenZaloGroupAsync();
+            };
+            addManualZaloBtn.Click += (_, _) =>
+            {
+                var name = manualZaloGroupInput.Text.Trim();
                 if (!string.IsNullOrWhiteSpace(name))
                 {
-                    AddOrCheckGroupItem(name, true);
-                    manualGroupInput.Clear();
+                    AddOrCheckZaloGroupItem(name, true);
+                    manualZaloGroupInput.Clear();
                     SaveConfig();
-                    statusLabel.Text = $"Đã thêm nhóm '{name}' vào danh sách tích chọn.";
                 }
             };
-            removeUncheckedBtn.Click += (_, _) =>
+            cleanZaloBtn.Click += (_, _) =>
             {
-                for (int i = groupsCheckList.Items.Count - 1; i >= 0; i--)
+                for (int i = zaloGroupsCheckList.Items.Count - 1; i >= 0; i--)
+                    if (!zaloGroupsCheckList.GetItemChecked(i)) zaloGroupsCheckList.Items.RemoveAt(i);
+                SaveConfig();
+            };
+
+            loadFbBtn.Click += async (_, _) =>
+            {
+                browserTabs.SelectedIndex = 1;
+                targetTabs.SelectedIndex = 1;
+                await LoadGroupsFromFacebookAsync();
+            };
+            addOpenFbBtn.Click += (_, _) =>
+            {
+                browserTabs.SelectedIndex = 1;
+                targetTabs.SelectedIndex = 1;
+                AddCurrentOpenFacebookGroup();
+            };
+            addManualFbBtn.Click += (_, _) =>
+            {
+                var raw = manualFbGroupInput.Text.Trim();
+                if (!string.IsNullOrWhiteSpace(raw))
                 {
-                    if (!groupsCheckList.GetItemChecked(i))
-                        groupsCheckList.Items.RemoveAt(i);
+                    var url = NormalizeFbGroupUrl(raw);
+                    if (!string.IsNullOrWhiteSpace(url))
+                    {
+                        AddOrCheckFbGroupItem(raw, url, true);
+                        manualFbGroupInput.Clear();
+                        SaveConfig();
+                    }
+                    else
+                    {
+                        MessageBox.Show(this, "Hãy dán đường dẫn nhóm Facebook hợp lệ (ví dụ: https://www.facebook.com/groups/123456).", "Facebook", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
                 }
+            };
+            cleanFbBtn.Click += (_, _) =>
+            {
+                for (int i = fbGroupsCheckList.Items.Count - 1; i >= 0; i--)
+                    if (!fbGroupsCheckList.GetItemChecked(i)) fbGroupsCheckList.Items.RemoveAt(i);
                 SaveConfig();
             };
 
@@ -310,14 +398,16 @@ namespace ToolAffiliate
             affIdBox.TextChanged += saveHandler;
             subIdBox.TextChanged += saveHandler;
             keywordsBox.TextChanged += saveHandler;
-            groupsCheckList.ItemCheck += (_, _) => BeginInvoke(new Action(SaveConfig));
+            zaloGroupsCheckList.ItemCheck += (_, _) => BeginInvoke(new Action(SaveConfig));
+            fbGroupsCheckList.ItemCheck += (_, _) => BeginInvoke(new Action(SaveConfig));
             batchCountInput.ValueChanged += saveHandler;
             cycleMinutesInput.ValueChanged += saveHandler;
             minDelayInput.ValueChanged += saveHandler;
             maxDelayInput.ValueChanged += saveHandler;
 
-            autoPilotBtn.Click += async (_, _) => await RunAutoSendFlowAsync(loopForever: true, autoPilotBtn, sendOnceBtn, fetchPreviewBtn, stopBtn, loadGroupsBtn);
-            sendOnceBtn.Click += async (_, _) => await RunAutoSendFlowAsync(loopForever: false, autoPilotBtn, sendOnceBtn, fetchPreviewBtn, stopBtn, loadGroupsBtn);
+            autoBothBtn.Click += async (_, _) => await RunMasterFlowAsync(runZalo: true, runFb: true, loopForever: true, autoBothBtn, sendZaloOnceBtn, sendFbOnceBtn, fetchPreviewBtn, stopBtn);
+            sendZaloOnceBtn.Click += async (_, _) => await RunMasterFlowAsync(runZalo: true, runFb: false, loopForever: false, autoBothBtn, sendZaloOnceBtn, sendFbOnceBtn, fetchPreviewBtn, stopBtn);
+            sendFbOnceBtn.Click += async (_, _) => await RunMasterFlowAsync(runZalo: false, runFb: true, loopForever: false, autoBothBtn, sendZaloOnceBtn, sendFbOnceBtn, fetchPreviewBtn, stopBtn);
 
             fetchPreviewBtn.Click += async (_, _) =>
             {
@@ -337,24 +427,24 @@ namespace ToolAffiliate
             stopBtn.Click += (_, _) =>
             {
                 sendCts?.Cancel();
-                statusLabel.Text = "Đang dừng tiến trình gửi...";
+                statusLabel.Text = "Đang dừng tiến trình tự động...";
             };
 
-            actions.Controls.AddRange(new Control[] { autoPilotBtn, sendOnceBtn, fetchPreviewBtn, stopBtn });
+            actions.Controls.AddRange(new Control[] { autoBothBtn, sendZaloOnceBtn, sendFbOnceBtn, fetchPreviewBtn, stopBtn });
 
             statusLabel.Dock = DockStyle.Bottom;
             statusLabel.Height = 24;
             statusLabel.Padding = new Padding(4, 4, 0, 0);
             statusLabel.Font = new Font("Segoe UI", 9, FontStyle.Bold);
             statusLabel.ForeColor = Color.FromArgb(25, 90, 160);
-            statusLabel.Text = "Đang chuẩn bị Zalo Web...";
+            statusLabel.Text = "Đang khởi tạo trình duyệt Zalo & Facebook...";
 
             bottom.Controls.Add(splitBottom);
             bottom.Controls.Add(configGroup);
             bottom.Controls.Add(actions);
             bottom.Controls.Add(statusLabel);
 
-            Controls.Add(zaloBrowser);
+            Controls.Add(browserTabs);
             Controls.Add(bottom);
 
             Shown += async (_, _) =>
@@ -362,9 +452,9 @@ namespace ToolAffiliate
                 BeginInvoke(new Action(() =>
                 {
                     if (splitBottom.ClientSize.Width > 600)
-                        splitBottom.SplitterDistance = (int)(splitBottom.ClientSize.Width * 0.54);
+                        splitBottom.SplitterDistance = (int)(splitBottom.ClientSize.Width * 0.50);
                 }));
-                await InitializeZaloAsync();
+                await InitializeBrowsersAsync();
             };
 
             FormClosed += (_, _) =>
@@ -372,24 +462,103 @@ namespace ToolAffiliate
                 sendCts?.Cancel();
                 SaveConfig();
                 try { zaloBrowser.CoreWebView2?.Stop(); } catch { }
+                try { fbBrowser.CoreWebView2?.Stop(); } catch { }
                 zaloBrowser.Dispose();
+                fbBrowser.Dispose();
             };
         }
 
-        private void AddOrCheckGroupItem(string groupName, bool isChecked)
+        private async Task InitializeBrowsersAsync()
+        {
+            if (initialized) return;
+            initialized = true;
+            try
+            {
+                Directory.CreateDirectory(zaloProfilePath);
+                var zaloEnv = await CoreWebView2Environment.CreateAsync(null, zaloProfilePath);
+                await zaloBrowser.EnsureCoreWebView2Async(zaloEnv);
+                zaloBrowser.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
+                zaloBrowser.CoreWebView2.FrameCreated += (_, args) =>
+                {
+                    try
+                    {
+                        var frame = args.Frame;
+                        zaloFrames.Add(frame);
+                        frame.Destroyed += (_, _) => zaloFrames.Remove(frame);
+                    }
+                    catch { }
+                };
+                zaloBrowser.CoreWebView2.Navigate("https://chat.zalo.me/");
+
+                Directory.CreateDirectory(fbProfilePath);
+                var fbEnv = await CoreWebView2Environment.CreateAsync(null, fbProfilePath);
+                await fbBrowser.EnsureCoreWebView2Async(fbEnv);
+                fbBrowser.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
+                fbBrowser.CoreWebView2.Navigate("https://www.facebook.com/groups/joins/");
+
+                statusLabel.Text = "Zalo & Facebook đã sẵn sàng! Hãy đăng nhập (nếu cần), quét/tích chọn nhóm rồi bấm BẬT AUTO.";
+            }
+            catch (Exception ex)
+            {
+                statusLabel.Text = "Lỗi khởi tạo trình duyệt: " + ex.Message;
+            }
+        }
+
+        private void AddOrCheckZaloGroupItem(string groupName, bool isChecked)
         {
             var clean = groupName.Trim();
             if (string.IsNullOrWhiteSpace(clean)) return;
-
-            for (int i = 0; i < groupsCheckList.Items.Count; i++)
+            for (int i = 0; i < zaloGroupsCheckList.Items.Count; i++)
             {
-                if (string.Equals(groupsCheckList.Items[i]?.ToString(), clean, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(zaloGroupsCheckList.Items[i]?.ToString(), clean, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (isChecked) groupsCheckList.SetItemChecked(i, true);
+                    if (isChecked) zaloGroupsCheckList.SetItemChecked(i, true);
                     return;
                 }
             }
-            groupsCheckList.Items.Add(clean, isChecked);
+            zaloGroupsCheckList.Items.Add(clean, isChecked);
+        }
+
+        private void AddOrCheckFbGroupItem(string name, string url, bool isChecked)
+        {
+            var cleanUrl = NormalizeFbGroupUrl(url);
+            if (string.IsNullOrWhiteSpace(cleanUrl)) return;
+            var cleanName = string.IsNullOrWhiteSpace(name) ? cleanUrl : name.Trim();
+
+            for (int i = 0; i < fbGroupsCheckList.Items.Count; i++)
+            {
+                if (fbGroupsCheckList.Items[i] is FbGroupEntry existing &&
+                    string.Equals(existing.Url, cleanUrl, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!string.IsNullOrWhiteSpace(cleanName) && existing.Name == existing.Url)
+                        existing.Name = cleanName;
+                    if (isChecked) fbGroupsCheckList.SetItemChecked(i, true);
+                    return;
+                }
+            }
+            fbGroupsCheckList.Items.Add(new FbGroupEntry { Name = cleanName, Url = cleanUrl, Checked = isChecked }, isChecked);
+        }
+
+        private static string NormalizeFbGroupUrl(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return "";
+            var s = raw.Trim();
+            if (s.Contains('|')) s = s.Split('|').Last().Trim();
+            if (!s.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                s = "https://www.facebook.com/groups/" + s.Trim('/');
+            if (Uri.TryCreate(s, UriKind.Absolute, out var uri) &&
+                uri.Host.Contains("facebook.com", StringComparison.OrdinalIgnoreCase) &&
+                uri.AbsolutePath.StartsWith("/groups/", StringComparison.OrdinalIgnoreCase))
+            {
+                var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (segments.Length >= 2 && !string.Equals(segments[1], "joins", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(segments[1], "feed", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(segments[1], "discover", StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"https://www.facebook.com/groups/{segments[1]}/";
+                }
+            }
+            return "";
         }
 
         private void LoadSavedConfig()
@@ -412,7 +581,15 @@ namespace ToolAffiliate
                 var allGroups = cfg.SavedGroups ?? new List<string>();
                 foreach (var g in allGroups.Concat(checkedSet).Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    AddOrCheckGroupItem(g, checkedSet.Contains(g));
+                    AddOrCheckZaloGroupItem(g, checkedSet.Contains(g));
+                }
+
+                if (cfg.FbGroups != null)
+                {
+                    foreach (var fg in cfg.FbGroups)
+                    {
+                        AddOrCheckFbGroupItem(fg.Name, fg.Url, fg.Checked);
+                    }
                 }
             }
             catch { }
@@ -423,15 +600,25 @@ namespace ToolAffiliate
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(configFilePath)!);
-                var allList = new List<string>();
-                var checkedList = new List<string>();
+                var allZalo = new List<string>();
+                var checkedZalo = new List<string>();
 
-                for (int i = 0; i < groupsCheckList.Items.Count; i++)
+                for (int i = 0; i < zaloGroupsCheckList.Items.Count; i++)
                 {
-                    var s = groupsCheckList.Items[i]?.ToString()?.Trim();
+                    var s = zaloGroupsCheckList.Items[i]?.ToString()?.Trim();
                     if (string.IsNullOrWhiteSpace(s)) continue;
-                    allList.Add(s);
-                    if (groupsCheckList.GetItemChecked(i)) checkedList.Add(s);
+                    allZalo.Add(s);
+                    if (zaloGroupsCheckList.GetItemChecked(i)) checkedZalo.Add(s);
+                }
+
+                var fbList = new List<FbGroupEntry>();
+                for (int i = 0; i < fbGroupsCheckList.Items.Count; i++)
+                {
+                    if (fbGroupsCheckList.Items[i] is FbGroupEntry entry)
+                    {
+                        entry.Checked = fbGroupsCheckList.GetItemChecked(i);
+                        fbList.Add(entry);
+                    }
                 }
 
                 var cfg = new AddlivetagConfig
@@ -444,184 +631,23 @@ namespace ToolAffiliate
                     AutoCycleMinutes = (int)cycleMinutesInput.Value,
                     MinDelaySeconds = (int)minDelayInput.Value,
                     MaxDelaySeconds = (int)maxDelayInput.Value,
-                    SavedGroups = allList,
-                    CheckedGroups = checkedList
+                    SavedGroups = allZalo,
+                    CheckedGroups = checkedZalo,
+                    FbGroups = fbList
                 };
                 File.WriteAllText(configFilePath, JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
             }
             catch { }
         }
 
-        private async Task InitializeZaloAsync()
-        {
-            if (initialized) return;
-            initialized = true;
-            try
-            {
-                Directory.CreateDirectory(profilePath);
-                var environment = await CoreWebView2Environment.CreateAsync(null, profilePath);
-                await zaloBrowser.EnsureCoreWebView2Async(environment);
-                zaloBrowser.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
-                zaloBrowser.CoreWebView2.Settings.IsStatusBarEnabled = true;
-                zaloBrowser.CoreWebView2.FrameCreated += (_, args) =>
-                {
-                    try
-                    {
-                        var frame = args.Frame;
-                        frames.Add(frame);
-                        frame.Destroyed += (_, _) => frames.Remove(frame);
-                    }
-                    catch { }
-                };
-                zaloBrowser.CoreWebView2.NavigationCompleted += (_, args) =>
-                {
-                    statusLabel.Text = args.IsSuccess
-                        ? "Zalo Web sẵn sàng. Bấm '🔄 Quét toàn bộ Nhóm' hoặc mở nhóm rồi bấm '➕ Thêm nhóm đang mở'."
-                        : "Không tải được Zalo Web. Kiểm tra kết nối Internet.";
-                };
-                zaloBrowser.CoreWebView2.Navigate("https://chat.zalo.me/");
-            }
-            catch (Exception ex)
-            {
-                statusLabel.Text = "Không khởi tạo được Zalo Web: " + ex.Message;
-            }
-        }
-
-        private async Task AddCurrentOpenGroupAsync()
-        {
-            if (zaloBrowser.CoreWebView2 is null) return;
-            const string script = "(() => { try { const titleNodes = [...document.querySelectorAll('header .header-title, .thread-chat-title, [data-id*=\"div_Main_TabMsg_Header\"] span, .title-header, h1, h2, h3, span, div')].filter(e => { const r = e.getBoundingClientRect(); return r.left > 320 && r.top >= 0 && r.top < 95 && r.width > 30 && r.height > 14 && r.height < 45; }); for (const el of titleNodes) { const t = (el.innerText || '').split('\\n')[0].trim(); if (t && t.length > 1 && t.length < 90 && !/thành viên|members|tìm kiếm|search|vừa truy cập|online/i.test(t)) { return { ok: true, name: t }; } } return { ok: false, name: '' }; } catch (e) { return { ok: false, name: '' }; } })();";
-
-            try
-            {
-                var raw = await ExecuteInMainAndFramesAsync(script);
-                if (!string.IsNullOrWhiteSpace(raw) && raw != "null")
-                {
-                    using var doc = JsonDocument.Parse(raw);
-                    if (doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean() &&
-                        doc.RootElement.TryGetProperty("name", out var nameProp))
-                    {
-                        var groupName = nameProp.GetString()?.Trim() ?? "";
-                        if (!string.IsNullOrWhiteSpace(groupName))
-                        {
-                            AddOrCheckGroupItem(groupName, true);
-                            SaveConfig();
-                            statusLabel.Text = $"Đã thêm và tích chọn nhóm đang mở: '{groupName}'!";
-                            return;
-                        }
-                    }
-                }
-                statusLabel.Text = "Chưa nhận diện được tiêu đề nhóm đang mở. Hãy bấm vào 1 nhóm trên Zalo trước.";
-            }
-            catch (Exception ex)
-            {
-                statusLabel.Text = "Lỗi đọc nhóm đang mở: " + ex.Message;
-            }
-        }
-
-        // CHỈ QUÉT NHÓM (KHÔNG LẤY CÁ NHÂN / BẠN BÈ)
-        private async Task LoadGroupsFromZaloAsync()
-        {
-            if (zaloBrowser.CoreWebView2 is null)
-            {
-                MessageBox.Show(this, "Zalo Web chưa sẵn sàng.", "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            statusLabel.Text = "Đang tự động lọc danh sách NHÓM từ Zalo Web...";
-            var collectedGroups = new List<string>();
-
-            try
-            {
-                const string openContactsGroupsScript = "(() => { try { const contactsTab = document.querySelector('[data-id*=\"Main_TabCT\"], [title*=\"Danh bạ\"], [title*=\"Contacts\"], .fa-Contact_28_Line, [data-translate-title*=\"STR_TAB_CONTACT\"]'); if (contactsTab) { (contactsTab.closest('[role=\"button\"], div, li') || contactsTab).click(); return { ok: true }; } return { ok: false }; } catch { return { ok: false }; } })();";
-                await ExecuteInMainAndFramesAsync(openContactsGroupsScript);
-                await Task.Delay(700);
-
-                const string clickGroupListMenuScript = "(() => { try { const nodes = [...document.querySelectorAll('div, span, p, li')].filter(e => { const r = e.getBoundingClientRect(); return r.left > 40 && r.left < 380 && r.top > 50 && r.top < 350 && r.width > 40 && r.height > 15; }); const grpMenu = nodes.find(e => /^(danh sách nhóm|nhóm và cộng đồng|group list|joined groups)$/i.test((e.innerText || '').trim())); if (grpMenu) { (grpMenu.closest('.conv-item, [role=\"listitem\"], div') || grpMenu).click(); return { ok: true }; } return { ok: false }; } catch { return { ok: false }; } })();";
-                var openedGroupMenu = await ExecuteInMainAndFramesAsync(clickGroupListMenuScript);
-                if (openedGroupMenu is not null && IsSuccessResult(openedGroupMenu))
-                {
-                    await Task.Delay(900);
-                }
-
-                // Tuyệt đối KHÔNG lấy cá nhân (loại bỏ các dòng có chữ "[Thiệp] Gửi lời chào..." hoặc hội thoại 1-1)
-                const string extractStrictGroupsScript = "(() => { try { const visible = e => { if (!e) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 30 && r.height > 14 && s.display !== 'none' && s.visibility !== 'hidden'; }; const ignore = /^(tất cả|chưa đọc|phân loại|tìm kiếm|danh sách bạn bè|danh sách nhóm|nhóm và cộng đồng|lời mời kết bạn|lời mời vào nhóm|my documents|cloud của tôi|truyền file|đồng bộ ngay|tải ngay|tin nhắn)$/i; const names = []; const addName = raw => { const clean = (raw || '').split('\\n')[0].replace(/\\s+/g, ' ').trim(); if (!clean || clean.length < 2 || clean.length > 95) return; if (ignore.test(clean) || /^\\d+\\s*(thành viên|members|nhóm|groups)/i.test(clean)) return; if (!names.includes(clean)) names.push(clean); }; const allDivs = [...document.querySelectorAll('div, li, article')].filter(visible); for (const d of allDivs) { const r = d.getBoundingClientRect(); if (r.left > 300 && r.height >= 40 && r.height <= 130) { const text = d.innerText || ''; if (/\\d+\\s*(thành viên|members)/i.test(text)) { const lines = text.split('\\n').map(x => x.trim()).filter(Boolean); if (lines.length >= 2) addName(lines[0]); } } } const leftItems = [...document.querySelectorAll('.conv-item, [id^=\"friend-item-\"], .msg-item, [role=\"listitem\"]')].filter(visible); for (const el of leftItems) { const r = el.getBoundingClientRect(); if (r.left > 450) continue; const text = el.innerText || ''; if (/gửi lời chào|kết bạn|đã là bạn bè/i.test(text)) continue; const html = el.innerHTML || ''; const lines = text.split('\\n').map(x => x.trim()).filter(Boolean); if (lines.length === 0) continue; const secondLine = lines[1] || ''; const thirdLine = lines[2] || ''; const isGroupIndicator = html.includes('group') || html.includes('users') || html.includes('community') || /^[A-Za-zÀ-ỹ0-9_\\s]{1,25}:\\s/.test(secondLine) || /^[A-Za-zÀ-ỹ0-9_\\s]{1,25}:\\s/.test(thirdLine) || /thành viên|nhóm|group|đã tạo nhóm|đã tham gia/i.test(text) || el.querySelectorAll('img').length > 1; if (isGroupIndicator) { addName(lines[0]); } } return { ok: true, groups: names }; } catch (e) { return { ok: false, groups: [] }; } })();";
-
-                var raw = await ExecuteInMainAndFramesAsync(extractStrictGroupsScript);
-                if (!string.IsNullOrWhiteSpace(raw) && raw != "null" && raw != "{}")
-                {
-                    using var doc = JsonDocument.Parse(raw);
-                    if (doc.RootElement.TryGetProperty("groups", out var groupsArr))
-                    {
-                        var list = JsonSerializer.Deserialize<List<string>>(groupsArr.GetRawText());
-                        if (list is not null) collectedGroups.AddRange(list);
-                    }
-                }
-
-                const string backToMsgTabScript = "(() => { try { const msgTab = document.querySelector('[data-id*=\"Main_TabMsg\"], [title*=\"Tin nhắn\"], [title*=\"Messages\"], .fa-Message_28_Line, [data-translate-title*=\"STR_TAB_MESSAGE\"]'); if (msgTab) (msgTab.closest('[role=\"button\"], div, li') || msgTab).click(); return { ok: true }; } catch { return { ok: false }; } })();";
-                await ExecuteInMainAndFramesAsync(backToMsgTabScript);
-                await Task.Delay(500);
-
-                var rawMsgTab = await ExecuteInMainAndFramesAsync(extractStrictGroupsScript);
-                if (!string.IsNullOrWhiteSpace(rawMsgTab) && rawMsgTab != "null" && rawMsgTab != "{}")
-                {
-                    using var doc2 = JsonDocument.Parse(rawMsgTab);
-                    if (doc2.RootElement.TryGetProperty("groups", out var groupsArr2))
-                    {
-                        var list2 = JsonSerializer.Deserialize<List<string>>(groupsArr2.GetRawText());
-                        if (list2 is not null) collectedGroups.AddRange(list2);
-                    }
-                }
-
-                await AddCurrentOpenGroupAsync();
-
-                var distinctGroups = collectedGroups.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                if (distinctGroups.Count > 0)
-                {
-                    foreach (var name in distinctGroups)
-                    {
-                        AddOrCheckGroupItem(name, false);
-                    }
-                    SaveConfig();
-                    statusLabel.Text = $"Đã lọc được {distinctGroups.Count} NHÓM! Bạn có thể bấm 'Xóa dòng bỏ tích' để dọn các mục không dùng.";
-                    return;
-                }
-
-                statusLabel.Text = "Hãy mở nhóm trên Zalo rồi nhấn nút '➕ Thêm nhóm đang mở' để thêm chính xác 100%!";
-            }
-            catch (Exception ex)
-            {
-                statusLabel.Text = "Lỗi quét danh sách nhóm: " + ex.Message;
-            }
-        }
-
-        private List<string> GetTargetGroups()
-        {
-            var list = new List<string>();
-            foreach (var item in groupsCheckList.CheckedItems)
-            {
-                if (item is string s && !string.IsNullOrWhiteSpace(s))
-                {
-                    list.Add(s);
-                }
-            }
-            return list;
-        }
-
-        private async Task RunAutoSendFlowAsync(bool loopForever, Button autoBtn, Button onceBtn, Button previewBtn, Button stopBtn, Button loadBtn)
+        private async Task RunMasterFlowAsync(bool runZalo, bool runFb, bool loopForever, Button autoBtn, Button zaloBtn, Button fbBtn, Button previewBtn, Button stopBtn)
         {
             if (autoPilotRunning) return;
-            if (zaloBrowser.CoreWebView2 is null)
-            {
-                MessageBox.Show(this, "Zalo Web chưa sẵn sàng.", "Zalo", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
             autoPilotRunning = true;
             autoBtn.Enabled = false;
-            onceBtn.Enabled = false;
+            zaloBtn.Enabled = false;
+            fbBtn.Enabled = false;
             previewBtn.Enabled = false;
-            loadBtn.Enabled = false;
             stopBtn.Enabled = true;
 
             sendCts = new CancellationTokenSource();
@@ -636,68 +662,107 @@ namespace ToolAffiliate
 
                     if (!string.IsNullOrWhiteSpace(apiKeyBox.Text))
                     {
-                        statusLabel.Text = $"[Đợt #{batchNumber}] Đang lấy sản phẩm sale từ Addlivetag API...";
-                        var (fetchedOk, fetchedMsg) = await FetchAndBuildSaleMessageAsync(token);
+                        statusLabel.Text = $"[Đợt #{batchNumber}] Đang lấy sản phẩm sale mới từ Addlivetag API...";
+                        var (_, fetchedMsg) = await FetchAndBuildSaleMessageAsync(token);
                         statusLabel.Text = $"[Đợt #{batchNumber}] {fetchedMsg}";
                     }
 
                     if (string.IsNullOrWhiteSpace(messageBox.Text))
                     {
-                        statusLabel.Text = "Chưa có nội dung tin nhắn! Hãy chọn sản phẩm, soạn tin, hoặc điền API Key Addlivetag.";
-                        MessageBox.Show(this, statusLabel.Text, "Thiếu nội dung gửi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        statusLabel.Text = "Chưa có nội dung bài đăng! Hãy chọn sản phẩm, nhập nội dung, hoặc điền API Key Addlivetag.";
+                        MessageBox.Show(this, statusLabel.Text, "Thiếu nội dung", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         break;
                     }
 
-                    var groups = GetTargetGroups();
                     int minSec = (int)Math.Min(minDelayInput.Value, maxDelayInput.Value);
                     int maxSec = (int)Math.Max(minDelayInput.Value, maxDelayInput.Value);
 
-                    if (groups.Count > 0)
+                    if (runZalo && zaloBrowser.CoreWebView2 is not null)
                     {
-                        int sentCount = 0;
-                        for (int i = 0; i < groups.Count; i++)
+                        var zaloGroups = GetCheckedZaloGroups();
+                        if (zaloGroups.Count > 0)
                         {
-                            token.ThrowIfCancellationRequested();
-                            var groupName = groups[i];
-                            statusLabel.Text = $"[Đợt #{batchNumber} - Nhóm {i + 1}/{groups.Count}] Đang mở nhóm '{groupName}'...";
-
-                            bool opened = await SelectGroupByNameAsync(groupName, token);
-                            if (!opened)
+                            browserTabs.SelectedIndex = 0;
+                            int sentZalo = 0;
+                            for (int i = 0; i < zaloGroups.Count; i++)
                             {
-                                statusLabel.Text = $"[Đợt #{batchNumber}] Không tìm thấy nhóm '{groupName}', nhưng sẽ thử gửi nếu nhóm đã mở sẵn...";
+                                token.ThrowIfCancellationRequested();
+                                var groupName = zaloGroups[i];
+                                statusLabel.Text = $"[Zalo {i + 1}/{zaloGroups.Count}] Đang mở nhóm '{groupName}'...";
+
+                                await SelectZaloGroupByNameAsync(groupName, token);
+                                await Task.Delay(1000, token);
+
+                                var (ok, _) = await SendMessageToCurrentOpenZaloChatAsync(token);
+                                if (ok) sentZalo++;
+
+                                if (i < zaloGroups.Count - 1 || (runFb && GetCheckedFbGroups().Count > 0))
+                                {
+                                    int delaySec = Random.Shared.Next(minSec, maxSec + 1);
+                                    await WaitWithCountdownAsync(delaySec, $"[Zalo] Đã gửi {sentZalo}/{i + 1} nhóm. Nghỉ chống spam", token);
+                                }
                             }
+                        }
+                        else if (!runFb)
+                        {
+                            browserTabs.SelectedIndex = 0;
+                            statusLabel.Text = "[Zalo] Đang gửi vào cuộc trò chuyện đang mở...";
+                            await SendMessageToCurrentOpenZaloChatAsync(token);
+                        }
+                    }
 
-                            await Task.Delay(1000, token);
-                            var (ok, sendMsg) = await SendMessageToCurrentOpenChatAsync(token);
-                            if (ok)
+                    if (runFb && fbBrowser.CoreWebView2 is not null)
+                    {
+                        var fbGroups = GetCheckedFbGroups();
+                        if (fbGroups.Count > 0)
+                        {
+                            browserTabs.SelectedIndex = 1;
+                            int postedFb = 0;
+                            for (int i = 0; i < fbGroups.Count; i++)
                             {
-                                sentCount++;
-                                statusLabel.Text = $"[Đợt #{batchNumber} - {i + 1}/{groups.Count}] Đã gửi thành công toàn bộ nội dung vào '{groupName}'!";
+                                token.ThrowIfCancellationRequested();
+                                var grp = fbGroups[i];
+                                statusLabel.Text = $"[Facebook {i + 1}/{fbGroups.Count}] Đang mở nhóm '{grp.Name}'...";
+
+                                var (ok, fbMsg) = await PostToFacebookGroupAsync(grp.Url, messageBox.Text, token);
+                                if (ok)
+                                {
+                                    postedFb++;
+                                    statusLabel.Text = $"[Facebook {i + 1}/{fbGroups.Count}] Đã đăng thành công vào '{grp.Name}'!";
+                                }
+                                else
+                                {
+                                    statusLabel.Text = $"[Facebook {i + 1}/{fbGroups.Count}] Chưa đăng được '{grp.Name}': {fbMsg}";
+                                }
+
+                                if (i < fbGroups.Count - 1)
+                                {
+                                    int delaySec = Random.Shared.Next(minSec, maxSec + 1);
+                                    await WaitWithCountdownAsync(delaySec, $"[Facebook] Đã đăng {postedFb}/{i + 1} nhóm. Nghỉ chống checkpoint", token);
+                                }
+                            }
+                        }
+                        else if (!runZalo)
+                        {
+                            browserTabs.SelectedIndex = 1;
+                            var currentUrl = fbBrowser.Source?.ToString() ?? "";
+                            if (currentUrl.Contains("/groups/", StringComparison.OrdinalIgnoreCase))
+                            {
+                                statusLabel.Text = "[Facebook] Đang đăng vào nhóm đang mở trên màn hình...";
+                                var (_, fbMsg) = await PostToFacebookGroupAsync(currentUrl, messageBox.Text, token);
+                                statusLabel.Text = fbMsg;
                             }
                             else
                             {
-                                statusLabel.Text = $"[Đợt #{batchNumber} - {i + 1}/{groups.Count}] Lỗi gửi '{groupName}': {sendMsg}";
-                            }
-
-                            if (i < groups.Count - 1)
-                            {
-                                int delaySec = Random.Shared.Next(minSec, maxSec + 1);
-                                await WaitWithCountdownAsync(delaySec, $"[Đợt #{batchNumber}] Đã gửi {sentCount}/{i + 1} nhóm. Nghỉ chống spam", token);
+                                MessageBox.Show(this, "Bạn chưa tích chọn nhóm Facebook nào! Hãy qua tab '📘 Tích chọn Nhóm Facebook' bấm '🔄 Quét Nhóm FB đã tham gia' rồi tích chọn.", "Facebook Auto", MessageBoxButtons.OK, MessageBoxIcon.Information);
                             }
                         }
-                        statusLabel.Text = $"Hoàn tất đợt #{batchNumber}: Đã gửi thành công {sentCount}/{groups.Count} nhóm!";
-                    }
-                    else
-                    {
-                        statusLabel.Text = $"[Đợt #{batchNumber}] Đang gửi vào nhóm đang mở trên Zalo Web...";
-                        var (ok, sendMsg) = await SendMessageToCurrentOpenChatAsync(token);
-                        statusLabel.Text = ok ? $"[Đợt #{batchNumber}] {sendMsg}" : $"Lỗi gửi: {sendMsg}";
                     }
 
                     if (!loopForever) break;
 
                     int cycleSeconds = (int)cycleMinutesInput.Value * 60;
-                    await WaitWithCountdownAsync(cycleSeconds, $"[Xong đợt #{batchNumber}] Tự động gửi đợt tiếp theo sau", token);
+                    await WaitWithCountdownAsync(cycleSeconds, $"[Xong đợt #{batchNumber}] Tự động chạy đợt tiếp theo sau", token);
 
                 } while (!token.IsCancellationRequested);
             }
@@ -715,12 +780,28 @@ namespace ToolAffiliate
                 if (!IsDisposed)
                 {
                     autoBtn.Enabled = true;
-                    onceBtn.Enabled = true;
+                    zaloBtn.Enabled = true;
+                    fbBtn.Enabled = true;
                     previewBtn.Enabled = true;
-                    loadBtn.Enabled = true;
                     stopBtn.Enabled = false;
                 }
             }
+        }
+
+        private List<string> GetCheckedZaloGroups()
+        {
+            var list = new List<string>();
+            foreach (var item in zaloGroupsCheckList.CheckedItems)
+                if (item is string s && !string.IsNullOrWhiteSpace(s)) list.Add(s);
+            return list;
+        }
+
+        private List<FbGroupEntry> GetCheckedFbGroups()
+        {
+            var list = new List<FbGroupEntry>();
+            foreach (var item in fbGroupsCheckList.CheckedItems)
+                if (item is FbGroupEntry g && !string.IsNullOrWhiteSpace(g.Url)) list.Add(g);
+            return list;
         }
 
         private async Task WaitWithCountdownAsync(int seconds, string prefix, CancellationToken token)
@@ -736,25 +817,220 @@ namespace ToolAffiliate
             }
         }
 
-        private async Task<bool> SelectGroupByNameAsync(string groupName, CancellationToken token)
+        private void AddCurrentOpenFacebookGroup()
+        {
+            var url = fbBrowser.Source?.ToString() ?? "";
+            var cleanUrl = NormalizeFbGroupUrl(url);
+            if (string.IsNullOrWhiteSpace(cleanUrl))
+            {
+                MessageBox.Show(this, "Trang Facebook hiện tại chưa phải là 1 nhóm cụ thể. Hãy bấm vào 1 nhóm trên Facebook trước.", "Facebook", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var title = fbBrowser.CoreWebView2?.DocumentTitle?.Replace("| Facebook", "").Trim() ?? cleanUrl;
+            AddOrCheckFbGroupItem(title, cleanUrl, true);
+            SaveConfig();
+            statusLabel.Text = $"Đã thêm và tích chọn nhóm FB: {title}";
+        }
+
+        private async Task LoadGroupsFromFacebookAsync()
+        {
+            if (fbBrowser.CoreWebView2 is null) return;
+            statusLabel.Text = "Đang mở trang Danh sách nhóm Facebook của bạn và quét...";
+
+            try
+            {
+                if (fbBrowser.Source?.AbsolutePath.Contains("/groups/joins", StringComparison.OrdinalIgnoreCase) != true)
+                {
+                    fbBrowser.CoreWebView2.Navigate("https://www.facebook.com/groups/joins/");
+                    await Task.Delay(3200);
+                }
+
+                const string scrollScript = "(() => { window.scrollBy(0, 900); return true; })();";
+                await fbBrowser.CoreWebView2.ExecuteScriptAsync(scrollScript);
+                await Task.Delay(1200);
+                await fbBrowser.CoreWebView2.ExecuteScriptAsync("(() => { window.scrollTo(0, 0); return true; })();");
+                await Task.Delay(500);
+
+                const string scanFbGroupsScript = "(() => { try { const anchors = [...document.querySelectorAll('a[href*="/groups/"]')]; const found = []; const seen = new Set(); const ignoreNames = /^(nhóm|groups|khám phá|discover|bảng feed của bạn|your feed|tạo nhóm mới|create new group|xem nhóm|view group|tham gia|join)$/i; for (const a of anchors) { let u; try { u = new URL(a.href, location.origin); } catch { continue; } const m = u.pathname.match(/^\/groups\/([^\/?#]+)\/?$/i); if (!m) continue; const slug = m[1]; if (/^(feed|discover|joins|create|notifications|search|categories)$/i.test(slug)) continue; const cleanUrl = 'https://www.facebook.com/groups/' + slug + '/'; if (seen.has(cleanUrl)) continue; const rawText = (a.innerText || a.getAttribute('aria-label') || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || ''; if (!rawText || rawText.length < 2 || rawText.length > 100 || ignoreNames.test(rawText)) continue; seen.add(cleanUrl); found.push({ name: rawText, url: cleanUrl }); } return { ok: true, groups: found }; } catch (e) { return { ok: false, groups: [] }; } })();";
+
+                var raw = await fbBrowser.CoreWebView2.ExecuteScriptAsync(scanFbGroupsScript);
+                if (!string.IsNullOrWhiteSpace(raw) && raw != "null")
+                {
+                    using var doc = JsonDocument.Parse(raw);
+                    if (doc.RootElement.TryGetProperty("groups", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    {
+                        int added = 0;
+                        foreach (var item in arr.EnumerateArray())
+                        {
+                            var name = GetFirstString(item, "name");
+                            var url = GetFirstString(item, "url");
+                            if (!string.IsNullOrWhiteSpace(url))
+                            {
+                                AddOrCheckFbGroupItem(name, url, false);
+                                added++;
+                            }
+                        }
+                        SaveConfig();
+                        if (added > 0)
+                        {
+                            statusLabel.Text = $"Đã quét được {added} nhóm Facebook! Hãy tích chọn các nhóm bạn muốn đăng bài.";
+                            return;
+                        }
+                    }
+                }
+                statusLabel.Text = "Chưa quét được nhóm. Hãy chắc chắn bạn đã đăng nhập Facebook trên tab Trình duyệt Facebook.";
+            }
+            catch (Exception ex)
+            {
+                statusLabel.Text = "Lỗi quét nhóm Facebook: " + ex.Message;
+            }
+        }
+
+        private async Task<(bool Ok, string Message)> PostToFacebookGroupAsync(string groupUrl, string content, CancellationToken token)
+        {
+            if (fbBrowser.CoreWebView2 is null) return (false, "Facebook chưa sẵn sàng.");
+
+            var normalizedText = content.Replace("
+", "
+").Replace("", "
+").Trim();
+            try { Clipboard.SetText(normalizedText); } catch { }
+
+            fbBrowser.CoreWebView2.Navigate(groupUrl);
+            await Task.Delay(4200, token);
+
+            const string openComposerScript = "(() => { try { const visible = e => { if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 60 && r.height > 20 && r.top > 50 && r.top < 750; }; const candidates = [...document.querySelectorAll('[role="button"], span, div')].filter(visible); const trigger = candidates.find(e => { const t = (e.innerText || e.getAttribute('aria-label') || '').trim().toLowerCase(); return /^(bạn viết gì đi|viết gì đó|bạn đang nghĩ gì|write something|create a public post|tạo bài viết)/i.test(t); }); if (!trigger) return { ok: false, message: 'Không tìm thấy ô Tạo bài viết trong nhóm này.' }; const btn = trigger.closest('[role="button"]') || trigger; btn.scrollIntoView({ block: 'center' }); btn.click(); return { ok: true }; } catch (e) { return { ok: false, message: String(e) }; } })();";
+
+            var openRaw = await fbBrowser.CoreWebView2.ExecuteScriptAsync(openComposerScript);
+            if (string.IsNullOrWhiteSpace(openRaw) || !IsSuccessResult(openRaw))
+            {
+                return (false, "Không mở được khung viết bài (nhóm có thể đã tắt quyền đăng hoặc chưa tham gia).");
+            }
+
+            await Task.Delay(2200, token);
+
+            var payloadJson = JsonSerializer.Serialize(normalizedText);
+            string fillFbScript = "(() => { try { const msg = " + payloadJson + "; const visible = e => { if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 120 && r.height > 30; }; const dialog = document.querySelector('[role="dialog"]') || document.body; const editors = [...dialog.querySelectorAll('[contenteditable="true"][role="textbox"], [contenteditable="true"], textarea')].filter(visible); const editor = editors[0]; if (!editor) return { ok: false, message: 'Chưa hiện ô nhập nội dung bài viết Facebook.' }; editor.focus(); editor.click(); let inserted = false; try { const dt = new DataTransfer(); dt.setData('text/plain', msg); const pasteEvt = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }); editor.dispatchEvent(pasteEvt); inserted = (editor.innerText || '').trim().length > 10; } catch {} if (!inserted) { try { inserted = document.execCommand('insertText', false, msg); } catch {} } if (!(editor.innerText || '').trim()) { editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: msg })); editor.textContent = msg; editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: msg })); } return { ok: true }; } catch (e) { return { ok: false, message: String(e) }; } })();";
+
+            var fillRaw = await fbBrowser.CoreWebView2.ExecuteScriptAsync(fillFbScript);
+            if (string.IsNullOrWhiteSpace(fillRaw) || !IsSuccessResult(fillRaw))
+            {
+                return (false, "Không điền được chữ vào khung đăng bài Facebook.");
+            }
+
+            await Task.Delay(2000, token);
+
+            const string clickPostBtnScript = "(() => { try { const dialog = document.querySelector('[role="dialog"]') || document.body; const buttons = [...dialog.querySelectorAll('[aria-label="Đăng"], [aria-label="Post"], [role="button"]')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 40 && r.height > 20 && e.getAttribute('aria-disabled') !== 'true' && !e.disabled; }); const postBtn = buttons.find(b => { const label = (b.getAttribute('aria-label') || b.innerText || '').trim().toLowerCase(); return label === 'đăng' || label === 'post'; }); if (!postBtn) return { ok: false, message: 'Không tìm thấy nút Đăng (hoặc nút Đăng đang bị khóa).' }; postBtn.click(); return { ok: true, message: 'Đã tự động điền và bấm nút Đăng lên nhóm Facebook!' }; } catch (e) { return { ok: false, message: String(e) }; } })();";
+
+            var postRaw = await fbBrowser.CoreWebView2.ExecuteScriptAsync(clickPostBtnScript);
+            if (!string.IsNullOrWhiteSpace(postRaw) && IsSuccessResult(postRaw))
+            {
+                await Task.Delay(3500, token);
+                return (true, "Đã đăng bài thành công!");
+            }
+
+            return (false, "Đã điền nội dung nhưng chưa bấm được nút Đăng.");
+        }
+
+        private async Task AddCurrentOpenZaloGroupAsync()
+        {
+            if (zaloBrowser.CoreWebView2 is null) return;
+            const string script = "(() => { try { const titleNodes = [...document.querySelectorAll('header .header-title, .thread-chat-title, [data-id*="div_Main_TabMsg_Header"] span, .title-header, h1, h2, h3, span, div')].filter(e => { const r = e.getBoundingClientRect(); return r.left > 320 && r.top >= 0 && r.top < 95 && r.width > 30 && r.height > 14 && r.height < 45; }); for (const el of titleNodes) { const t = (el.innerText || '').split('\n')[0].trim(); if (t && t.length > 1 && t.length < 90 && !/thành viên|members|tìm kiếm|search|vừa truy cập|online/i.test(t)) { return { ok: true, name: t }; } } return { ok: false, name: '' }; } catch (e) { return { ok: false, name: '' }; } })();";
+
+            try
+            {
+                var raw = await ExecuteInZaloFramesAsync(script);
+                if (!string.IsNullOrWhiteSpace(raw) && raw != "null")
+                {
+                    using var doc = JsonDocument.Parse(raw);
+                    if (doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean() &&
+                        doc.RootElement.TryGetProperty("name", out var nameProp))
+                    {
+                        var groupName = nameProp.GetString()?.Trim() ?? "";
+                        if (!string.IsNullOrWhiteSpace(groupName))
+                        {
+                            AddOrCheckZaloGroupItem(groupName, true);
+                            SaveConfig();
+                            statusLabel.Text = $"Đã thêm và tích chọn nhóm Zalo: '{groupName}'!";
+                            return;
+                        }
+                    }
+                }
+                statusLabel.Text = "Hãy bấm mở 1 nhóm trên Zalo Web trước khi bấm nút này.";
+            }
+            catch { }
+        }
+
+        private async Task LoadGroupsFromZaloAsync()
+        {
+            if (zaloBrowser.CoreWebView2 is null) return;
+            statusLabel.Text = "Đang tự động lọc danh sách NHÓM từ Zalo Web...";
+            var collectedGroups = new List<string>();
+
+            try
+            {
+                const string openContactsGroupsScript = "(() => { try { const contactsTab = document.querySelector('[data-id*="Main_TabCT"], [title*="Danh bạ"], [title*="Contacts"], .fa-Contact_28_Line, [data-translate-title*="STR_TAB_CONTACT"]'); if (contactsTab) { (contactsTab.closest('[role="button"], div, li') || contactsTab).click(); return { ok: true }; } return { ok: false }; } catch { return { ok: false }; } })();";
+                await ExecuteInZaloFramesAsync(openContactsGroupsScript);
+                await Task.Delay(700);
+
+                const string clickGroupListMenuScript = "(() => { try { const nodes = [...document.querySelectorAll('div, span, p, li')].filter(e => { const r = e.getBoundingClientRect(); return r.left > 40 && r.left < 380 && r.top > 50 && r.top < 350 && r.width > 40 && r.height > 15; }); const grpMenu = nodes.find(e => /^(danh sách nhóm|nhóm và cộng đồng|group list|joined groups)$/i.test((e.innerText || '').trim())); if (grpMenu) { (grpMenu.closest('.conv-item, [role="listitem"], div') || grpMenu).click(); return { ok: true }; } return { ok: false }; } catch { return { ok: false }; } })();";
+                var openedGroupMenu = await ExecuteInZaloFramesAsync(clickGroupListMenuScript);
+                if (openedGroupMenu is not null && IsSuccessResult(openedGroupMenu))
+                {
+                    await Task.Delay(900);
+                }
+
+                const string extractStrictGroupsScript = "(() => { try { const visible = e => { if (!e) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 30 && r.height > 14 && s.display !== 'none' && s.visibility !== 'hidden'; }; const ignore = /^(tất cả|chưa đọc|phân loại|tìm kiếm|danh sách bạn bè|danh sách nhóm|nhóm và cộng đồng|lời mời kết bạn|lời mời vào nhóm|my documents|cloud của tôi|truyền file|đồng bộ ngay|tải ngay|tin nhắn)$/i; const names = []; const addName = raw => { const clean = (raw || '').split('\n')[0].replace(/\s+/g, ' ').trim(); if (!clean || clean.length < 2 || clean.length > 95) return; if (ignore.test(clean) || /^\d+\s*(thành viên|members|nhóm|groups)/i.test(clean)) return; if (!names.includes(clean)) names.push(clean); }; const allDivs = [...document.querySelectorAll('div, li, article')].filter(visible); for (const d of allDivs) { const r = d.getBoundingClientRect(); if (r.left > 300 && r.height >= 40 && r.height <= 130) { const text = d.innerText || ''; if (/\d+\s*(thành viên|members)/i.test(text)) { const lines = text.split('\n').map(x => x.trim()).filter(Boolean); if (lines.length >= 2) addName(lines[0]); } } } const leftItems = [...document.querySelectorAll('.conv-item, [id^="friend-item-"], .msg-item, [role="listitem"]')].filter(visible); for (const el of leftItems) { const r = el.getBoundingClientRect(); if (r.left > 450) continue; const text = el.innerText || ''; if (/gửi lời chào|kết bạn|đã là bạn bè/i.test(text)) continue; const html = el.innerHTML || ''; const lines = text.split('\n').map(x => x.trim()).filter(Boolean); if (lines.length === 0) continue; const secondLine = lines[1] || ''; const thirdLine = lines[2] || ''; const isGroupIndicator = html.includes('group') || html.includes('users') || html.includes('community') || /^[A-Za-zÀ-ỹ0-9_\s]{1,25}:\s/.test(secondLine) || /^[A-Za-zÀ-ỹ0-9_\s]{1,25}:\s/.test(thirdLine) || /thành viên|nhóm|group|đã tạo nhóm|đã tham gia/i.test(text) || el.querySelectorAll('img').length > 1; if (isGroupIndicator) { addName(lines[0]); } } return { ok: true, groups: names }; } catch (e) { return { ok: false, groups: [] }; } })();";
+
+                var raw = await ExecuteInZaloFramesAsync(extractStrictGroupsScript);
+                if (!string.IsNullOrWhiteSpace(raw) && raw != "null" && raw != "{}")
+                {
+                    using var doc = JsonDocument.Parse(raw);
+                    if (doc.RootElement.TryGetProperty("groups", out var groupsArr))
+                    {
+                        var list = JsonSerializer.Deserialize<List<string>>(groupsArr.GetRawText());
+                        if (list is not null) collectedGroups.AddRange(list);
+                    }
+                }
+
+                const string backToMsgTabScript = "(() => { try { const msgTab = document.querySelector('[data-id*="Main_TabMsg"], [title*="Tin nhắn"], [title*="Messages"], .fa-Message_28_Line, [data-translate-title*="STR_TAB_MESSAGE"]'); if (msgTab) (msgTab.closest('[role="button"], div, li') || msgTab).click(); return { ok: true }; } catch { return { ok: false }; } })();";
+                await ExecuteInZaloFramesAsync(backToMsgTabScript);
+                await Task.Delay(500);
+
+                var distinctGroups = collectedGroups.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (distinctGroups.Count > 0)
+                {
+                    foreach (var name in distinctGroups) AddOrCheckZaloGroupItem(name, false);
+                    SaveConfig();
+                    statusLabel.Text = $"Đã lọc được {distinctGroups.Count} nhóm Zalo!";
+                    return;
+                }
+                statusLabel.Text = "Hãy mở nhóm trên Zalo rồi nhấn '➕ Thêm nhóm đang mở' để thêm nhanh!";
+            }
+            catch (Exception ex)
+            {
+                statusLabel.Text = "Lỗi quét nhóm Zalo: " + ex.Message;
+            }
+        }
+
+        private async Task<bool> SelectZaloGroupByNameAsync(string groupName, CancellationToken token)
         {
             var nameJson = JsonSerializer.Serialize(groupName.Trim());
 
-            var clickDirectResult = await ExecuteInMainAndFramesAsync(BuildClickConversationScript(nameJson));
+            var clickDirectResult = await ExecuteInZaloFramesAsync(BuildClickConversationScript(nameJson));
             if (clickDirectResult is not null && IsSuccessResult(clickDirectResult))
             {
                 await Task.Delay(600, token);
                 return true;
             }
 
-            var searchResult = await ExecuteInMainAndFramesAsync(BuildTypeSearchBoxScript(nameJson));
+            var searchResult = await ExecuteInZaloFramesAsync(BuildTypeSearchBoxScript(nameJson));
             if (searchResult is not null && IsSuccessResult(searchResult))
             {
                 await Task.Delay(1200, token);
-
                 for (int attempt = 0; attempt < 4; attempt++)
                 {
-                    var clickAfterSearch = await ExecuteInMainAndFramesAsync(BuildClickConversationScript(nameJson));
+                    var clickAfterSearch = await ExecuteInZaloFramesAsync(BuildClickConversationScript(nameJson));
                     if (clickAfterSearch is not null && IsSuccessResult(clickAfterSearch))
                     {
                         await Task.Delay(600, token);
@@ -762,18 +1038,19 @@ namespace ToolAffiliate
                     }
                     await Task.Delay(500, token);
                 }
-
-                await ExecuteInMainAndFramesAsync(BuildSelectFirstSearchResultScript());
+                await ExecuteInZaloFramesAsync(BuildSelectFirstSearchResultScript());
                 await Task.Delay(700, token);
                 return true;
             }
-
             return false;
         }
 
-        private async Task<(bool Ok, string Message)> SendMessageToCurrentOpenChatAsync(CancellationToken token)
+        private async Task<(bool Ok, string Message)> SendMessageToCurrentOpenZaloChatAsync(CancellationToken token)
         {
-            var normalizedText = messageBox.Text.Replace("\r\n", "\n").Replace("\r", "\n").Trim();
+            var normalizedText = messageBox.Text.Replace("
+", "
+").Replace("", "
+").Trim();
             try { Clipboard.SetText(normalizedText); } catch { }
 
             var payload = JsonSerializer.Serialize(normalizedText);
@@ -782,7 +1059,7 @@ namespace ToolAffiliate
             await Task.Delay(250, token);
 
             var fillScript = BuildFillScript(payload);
-            var result = await ExecuteInMainAndFramesAsync(fillScript);
+            var result = await ExecuteInZaloFramesAsync(fillScript);
             if (string.IsNullOrWhiteSpace(result) || result == "null")
             {
                 return (false, "Không tìm thấy ô nhập tin nhắn Zalo.");
@@ -796,10 +1073,9 @@ namespace ToolAffiliate
 
             if (!ok) return (false, message);
 
-            // Chờ 750ms để Zalo nhận đủ tất cả các dòng trước khi bấm Gửi
             await Task.Delay(750, token);
 
-            var triggerResult = await ExecuteInMainAndFramesAsync(BuildTriggerSendScript());
+            var triggerResult = await ExecuteInZaloFramesAsync(BuildTriggerSendScript());
             if (!string.IsNullOrWhiteSpace(triggerResult) && triggerResult != "null")
             {
                 try
@@ -819,13 +1095,12 @@ namespace ToolAffiliate
             return (true, message);
         }
 
-        private async Task<string?> ExecuteInMainAndFramesAsync(string script)
+        private async Task<string?> ExecuteInZaloFramesAsync(string script)
         {
             var core = zaloBrowser.CoreWebView2;
             if (core is null) return null;
 
             string? lastErrorResult = null;
-
             try
             {
                 var result = await core.ExecuteScriptAsync(script);
@@ -834,7 +1109,7 @@ namespace ToolAffiliate
             }
             catch { }
 
-            foreach (var frame in frames.ToArray())
+            foreach (var frame in zaloFrames.ToArray())
             {
                 try
                 {
@@ -859,20 +1134,19 @@ namespace ToolAffiliate
         }
 
         private static string BuildClickConversationScript(string groupNameJson) =>
-            "(() => { try { const target = (" + groupNameJson + " || '').toLowerCase().replace(/\\s+/g, ' ').trim(); if (!target) return { ok: false, message: 'Tên nhóm trống.' }; const headerTitle = document.querySelector('header .header-title, .thread-chat-title, [data-id*=\"div_Main_TabMsg_Header\"] span, .title-header'); if (headerTitle && (headerTitle.innerText || '').toLowerCase().replace(/\\s+/g, ' ').trim() === target) { return { ok: true, message: 'Nhóm đã được mở sẵn: ' + target }; } const visible = e => { if (!e) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 15 && r.height > 14 && r.left < 500 && r.top > 45 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0; }; const items = [...document.querySelectorAll('.conv-item, [id^=\"friend-item-\"], .msg-item, [data-id*=\"Conv\"], [role=\"listitem\"], .virtualized-scroll div')].filter(visible); let best = null; let bestScore = 0; for (const el of items) { if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) continue; const lines = (el.innerText || '').split('\\n').map(x => x.replace(/\\s+/g, ' ').trim()).filter(Boolean); if (lines.length === 0) continue; const firstLine = lines[0].toLowerCase(); const fullText = lines.join(' ').toLowerCase(); if (fullText.length > 220) continue; let score = 0; if (firstLine === target) score = 500 - fullText.length; else if (firstLine.includes(target)) score = 350 - firstLine.length; else if (fullText.includes(target)) score = 200 - Math.min(150, fullText.length); if (score > bestScore) { bestScore = score; best = el; } } if (!best) return { ok: false, message: 'Chưa thấy nhóm trong danh sách.' }; const row = best.closest('.conv-item, [id^=\"friend-item-\"], .msg-item, [role=\"listitem\"]') || best; row.scrollIntoView({ block: 'center' }); const rect = row.getBoundingClientRect(); const cx = rect.left + Math.min(80, rect.width / 2); const cy = rect.top + Math.min(25, rect.height / 2); const targetsToClick = [row, best]; for (const t of targetsToClick) { t.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })); t.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })); t.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })); t.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })); t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })); } return { ok: true, message: 'Đã mở nhóm: ' + target }; } catch (e) { return { ok: false, message: String(e) }; } })();";
+            "(() => { try { const target = (" + groupNameJson + " || '').toLowerCase().replace(/\s+/g, ' ').trim(); if (!target) return { ok: false, message: 'Tên nhóm trống.' }; const headerTitle = document.querySelector('header .header-title, .thread-chat-title, [data-id*="div_Main_TabMsg_Header"] span, .title-header'); if (headerTitle && (headerTitle.innerText || '').toLowerCase().replace(/\s+/g, ' ').trim() === target) { return { ok: true, message: 'Nhóm đã được mở sẵn: ' + target }; } const visible = e => { if (!e) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 15 && r.height > 14 && r.left < 500 && r.top > 45 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0; }; const items = [...document.querySelectorAll('.conv-item, [id^="friend-item-"], .msg-item, [data-id*="Conv"], [role="listitem"], .virtualized-scroll div')].filter(visible); let best = null; let bestScore = 0; for (const el of items) { if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) continue; const lines = (el.innerText || '').split('\n').map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean); if (lines.length === 0) continue; const firstLine = lines[0].toLowerCase(); const fullText = lines.join(' ').toLowerCase(); if (fullText.length > 220) continue; let score = 0; if (firstLine === target) score = 500 - fullText.length; else if (firstLine.includes(target)) score = 350 - firstLine.length; else if (fullText.includes(target)) score = 200 - Math.min(150, fullText.length); if (score > bestScore) { bestScore = score; best = el; } } if (!best) return { ok: false, message: 'Chưa thấy nhóm trong danh sách.' }; const row = best.closest('.conv-item, [id^="friend-item-"], .msg-item, [role="listitem"]') || best; row.scrollIntoView({ block: 'center' }); const rect = row.getBoundingClientRect(); const cx = rect.left + Math.min(80, rect.width / 2); const cy = rect.top + Math.min(25, rect.height / 2); const targetsToClick = [row, best]; for (const t of targetsToClick) { t.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })); t.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })); t.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })); t.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })); t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })); } return { ok: true, message: 'Đã mở nhóm: ' + target }; } catch (e) { return { ok: false, message: String(e) }; } })();";
 
         private static string BuildTypeSearchBoxScript(string groupNameJson) =>
-            "(() => { try { const target = " + groupNameJson + "; const searchInput = document.querySelector('#contact-search-input, input[placeholder*=\"Tìm kiếm\"], input[placeholder*=\"Search\"], input[data-id*=\"txt_Main_Search\"]'); if (!searchInput) return { ok: false, message: 'Không tìm thấy ô Tìm kiếm trên Zalo Web.' }; searchInput.focus(); searchInput.click(); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set; if (setter) setter.call(searchInput, ''); else searchInput.value = ''; searchInput.dispatchEvent(new Event('input', { bubbles: true })); if (setter) setter.call(searchInput, target); else searchInput.value = target; searchInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: target })); searchInput.dispatchEvent(new Event('change', { bubbles: true })); searchInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', bubbles: true })); return { ok: true, message: 'Đã nhập tên nhóm vào ô tìm kiếm.' }; } catch (e) { return { ok: false, message: String(e) }; } })();";
+            "(() => { try { const target = " + groupNameJson + "; const searchInput = document.querySelector('#contact-search-input, input[placeholder*="Tìm kiếm"], input[placeholder*="Search"], input[data-id*="txt_Main_Search"]'); if (!searchInput) return { ok: false, message: 'Không tìm thấy ô Tìm kiếm trên Zalo Web.' }; searchInput.focus(); searchInput.click(); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set; if (setter) setter.call(searchInput, ''); else searchInput.value = ''; searchInput.dispatchEvent(new Event('input', { bubbles: true })); if (setter) setter.call(searchInput, target); else searchInput.value = target; searchInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: target })); searchInput.dispatchEvent(new Event('change', { bubbles: true })); searchInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', bubbles: true })); return { ok: true, message: 'Đã nhập tên nhóm vào ô tìm kiếm.' }; } catch (e) { return { ok: false, message: String(e) }; } })();";
 
         private static string BuildSelectFirstSearchResultScript() =>
-            "(() => { try { const searchInput = document.querySelector('#contact-search-input, input[placeholder*=\"Tìm kiếm\"], input[placeholder*=\"Search\"]'); if (searchInput) { searchInput.focus(); searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true })); searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })); return { ok: true, message: 'Đã chọn kết quả đầu tiên.' }; } return { ok: false, message: 'Không có ô tìm kiếm.' }; } catch (e) { return { ok: false, message: String(e) }; } })();";
+            "(() => { try { const searchInput = document.querySelector('#contact-search-input, input[placeholder*="Tìm kiếm"], input[placeholder*="Search"]'); if (searchInput) { searchInput.focus(); searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true })); searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })); return { ok: true, message: 'Đã chọn kết quả đầu tiên.' }; } return { ok: false, message: 'Không có ô tìm kiếm.' }; } catch (e) { return { ok: false, message: String(e) }; } })();";
 
-        // ĐIỀN NGUYÊN KHỐI NHIỀU DÒNG VÀO ZALO MÀ KHÔNG GỌI insertLineBreak (TRÁNH ZALO GỬI SỚM DÒNG 1)
         private static string BuildFillScript(string messageJson) =>
-            "(() => { try { const msg = " + messageJson + "; const visible = e => { if (!e) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled; }; const zaloSelectors = ['#richInput', '[id^=\"input_line_\"]', '.rich-input', '[data-translate-placeholder*=\"Nhập @\"]', '[data-translate-placeholder*=\"tin nhắn\"]', '[contenteditable=\"true\"]', '[role=\"textbox\"]', 'textarea']; let candidates = []; for (const sel of zaloSelectors) { for (const el of document.querySelectorAll(sel)) { if (visible(el) && !candidates.includes(el)) { const idAndClass = ((el.id || '') + ' ' + (el.className || '') + ' ' + (el.getAttribute('placeholder') || '')).toLowerCase(); if (/contact-search|search-input|tìm kiếm/.test(idAndClass)) continue; candidates.push(el); } } } candidates.sort((a, b) => { const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect(); const aId = (a.id || '').includes('richInput') || (a.id || '').includes('input_line') ? 1000 : 0; const bId = (b.id || '').includes('richInput') || (b.id || '').includes('input_line') ? 1000 : 0; return (bId + br.bottom * 2 + br.width) - (aId + ar.bottom * 2 + ar.width); }); let editor = candidates[0]; if (!editor) { return { ok: false, message: 'Chưa nhận diện được ô nhập tin nhắn. Hãy mở một nhóm trên Zalo Web.' }; } if (editor.closest('[contenteditable=\"true\"]')) { editor = editor.closest('[contenteditable=\"true\"]'); } window.__zaloLastEditor = editor; editor.click(); editor.focus(); if (editor.isContentEditable || editor.getAttribute('contenteditable') === 'true') { const selection = window.getSelection(); const range = document.createRange(); range.selectNodeContents(editor); selection.removeAllRanges(); selection.addRange(range); document.execCommand('delete', false, null); let pastedOk = false; try { const dt = new DataTransfer(); dt.setData('text/plain', msg); const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }); editor.dispatchEvent(pasteEvent); const currentText = (editor.innerText || '').trim(); pastedOk = currentText.length >= Math.min(25, msg.length) && currentText.includes('http'); } catch {} if (!pastedOk) { editor.innerHTML = ''; const lines = msg.split('\\n'); lines.forEach((line, idx) => { const div = document.createElement('div'); div.id = 'input_line_' + idx; if (line.trim().length > 0) { div.textContent = line; } else { div.appendChild(document.createElement('br')); } editor.appendChild(div); }); const rEnd = document.createRange(); rEnd.selectNodeContents(editor); rEnd.collapse(false); selection.removeAllRanges(); selection.addRange(rEnd); editor.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertFromPaste', data: msg })); editor.dispatchEvent(new Event('change', { bubbles: true })); } } else { const proto = editor.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set; if (setter) setter.call(editor, msg); else editor.value = msg; editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: msg })); editor.dispatchEvent(new Event('change', { bubbles: true })); } return { ok: true, message: 'Đã điền đầy đủ toàn bộ các dòng vào ô chat Zalo.' }; } catch (err) { return { ok: false, message: 'Lỗi điền nội dung trên Zalo Web: ' + (err && err.message ? err.message : String(err)) }; } })();";
+            "(() => { try { const msg = " + messageJson + "; const visible = e => { if (!e) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled; }; const zaloSelectors = ['#richInput', '[id^="input_line_"]', '.rich-input', '[data-translate-placeholder*="Nhập @"]', '[data-translate-placeholder*="tin nhắn"]', '[contenteditable="true"]', '[role="textbox"]', 'textarea']; let candidates = []; for (const sel of zaloSelectors) { for (const el of document.querySelectorAll(sel)) { if (visible(el) && !candidates.includes(el)) { const idAndClass = ((el.id || '') + ' ' + (el.className || '') + ' ' + (el.getAttribute('placeholder') || '')).toLowerCase(); if (/contact-search|search-input|tìm kiếm/.test(idAndClass)) continue; candidates.push(el); } } } candidates.sort((a, b) => { const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect(); const aId = (a.id || '').includes('richInput') || (a.id || '').includes('input_line') ? 1000 : 0; const bId = (b.id || '').includes('richInput') || (b.id || '').includes('input_line') ? 1000 : 0; return (bId + br.bottom * 2 + br.width) - (aId + ar.bottom * 2 + ar.width); }); let editor = candidates[0]; if (!editor) { return { ok: false, message: 'Chưa nhận diện được ô nhập tin nhắn. Hãy mở một nhóm trên Zalo Web.' }; } if (editor.closest('[contenteditable="true"]')) { editor = editor.closest('[contenteditable="true"]'); } window.__zaloLastEditor = editor; editor.click(); editor.focus(); if (editor.isContentEditable || editor.getAttribute('contenteditable') === 'true') { const selection = window.getSelection(); const range = document.createRange(); range.selectNodeContents(editor); selection.removeAllRanges(); selection.addRange(range); document.execCommand('delete', false, null); let pastedOk = false; try { const dt = new DataTransfer(); dt.setData('text/plain', msg); const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }); editor.dispatchEvent(pasteEvent); const currentText = (editor.innerText || '').trim(); pastedOk = currentText.length >= Math.min(25, msg.length) && currentText.includes('http'); } catch {} if (!pastedOk) { editor.innerHTML = ''; const lines = msg.split('\n'); lines.forEach((line, idx) => { const div = document.createElement('div'); div.id = 'input_line_' + idx; if (line.trim().length > 0) { div.textContent = line; } else { div.appendChild(document.createElement('br')); } editor.appendChild(div); }); const rEnd = document.createRange(); rEnd.selectNodeContents(editor); rEnd.collapse(false); selection.removeAllRanges(); selection.addRange(rEnd); editor.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertFromPaste', data: msg })); editor.dispatchEvent(new Event('change', { bubbles: true })); } } else { const proto = editor.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set; if (setter) setter.call(editor, msg); else editor.value = msg; editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: msg })); editor.dispatchEvent(new Event('change', { bubbles: true })); } return { ok: true, message: 'Đã điền đầy đủ toàn bộ các dòng vào ô chat Zalo.' }; } catch (err) { return { ok: false, message: 'Lỗi điền nội dung trên Zalo Web: ' + (err && err.message ? err.message : String(err)) }; } })();";
 
         private static string BuildTriggerSendScript() =>
-            "(() => { try { const visible = e => { if (!e) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 10 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled; }; const editor = window.__zaloLastEditor || document.querySelector('#richInput, [contenteditable=\"true\"]'); const sendSelectors = ['[data-translate-title=\"STR_SEND\"]', '[title=\"Gửi tin nhắn\"]', '[title=\"Send message\"]', '.send-msg-btn', '.fa-Sent-msg_24_Line', '[data-id*=\"btn_Main_Send\"]']; let sendBtn = null; for (const sel of sendSelectors) { const found = document.querySelector(sel); if (found && visible(found)) { sendBtn = found.closest('div[role=\"button\"], button, .z--btn--v2, .send-msg-btn') || found; break; } } if (!sendBtn) { const allButtons = [...document.querySelectorAll('button, [role=\"button\"], .z--btn--v2, i.fa-Sent-msg_24_Line')].filter(visible); const matched = allButtons.find(b => { const meta = ((b.innerText || '') + ' ' + (b.title || '') + ' ' + (b.className || '') + ' ' + (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-translate-title') || '')).toLowerCase(); return /str_send|gửi tin nhắn|send message|sent-msg|send-msg|^gửi$|^send$/i.test(meta.trim()); }); if (matched) sendBtn = matched.closest('div[role=\"button\"], button, .z--btn--v2') || matched; } if (sendBtn) { const rect = sendBtn.getBoundingClientRect(); const cx = rect.left + rect.width / 2; const cy = rect.top + rect.height / 2; sendBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy })); sendBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy })); sendBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy })); sendBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy })); sendBtn.click(); return { ok: true, message: 'Đã tự động điền đầy đủ link và bấm nút Gửi thành công!' }; } if (editor) { editor.focus(); const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, charCode: 13, bubbles: true, cancelable: true }; editor.dispatchEvent(new KeyboardEvent('keydown', enterOpts)); editor.dispatchEvent(new KeyboardEvent('keypress', enterOpts)); editor.dispatchEvent(new KeyboardEvent('keyup', enterOpts)); return { ok: true, message: 'Đã tự động điền đầy đủ link và nhấn Enter gửi thành công!' }; } return { ok: false, message: 'Không tìm thấy nút Gửi trên Zalo Web.' }; } catch (err) { return { ok: false, message: 'Lỗi kích hoạt nút Gửi: ' + (err && err.message ? err.message : String(err)) }; } })();";
+            "(() => { try { const visible = e => { if (!e) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 10 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled; }; const editor = window.__zaloLastEditor || document.querySelector('#richInput, [contenteditable="true"]'); const sendSelectors = ['[data-translate-title="STR_SEND"]', '[title="Gửi tin nhắn"]', '[title="Send message"]', '.send-msg-btn', '.fa-Sent-msg_24_Line', '[data-id*="btn_Main_Send"]']; let sendBtn = null; for (const sel of sendSelectors) { const found = document.querySelector(sel); if (found && visible(found)) { sendBtn = found.closest('div[role="button"], button, .z--btn--v2, .send-msg-btn') || found; break; } } if (!sendBtn) { const allButtons = [...document.querySelectorAll('button, [role="button"], .z--btn--v2, i.fa-Sent-msg_24_Line')].filter(visible); const matched = allButtons.find(b => { const meta = ((b.innerText || '') + ' ' + (b.title || '') + ' ' + (b.className || '') + ' ' + (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-translate-title') || '')).toLowerCase(); return /str_send|gửi tin nhắn|send message|sent-msg|send-msg|^gửi$|^send$/i.test(meta.trim()); }); if (matched) sendBtn = matched.closest('div[role="button"], button, .z--btn--v2') || matched; } if (sendBtn) { const rect = sendBtn.getBoundingClientRect(); const cx = rect.left + rect.width / 2; const cy = rect.top + rect.height / 2; sendBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy })); sendBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy })); sendBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy })); sendBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy })); sendBtn.click(); return { ok: true, message: 'Đã tự động điền đầy đủ link và bấm nút Gửi thành công!' }; } if (editor) { editor.focus(); const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, charCode: 13, bubbles: true, cancelable: true }; editor.dispatchEvent(new KeyboardEvent('keydown', enterOpts)); editor.dispatchEvent(new KeyboardEvent('keypress', enterOpts)); editor.dispatchEvent(new KeyboardEvent('keyup', enterOpts)); return { ok: true, message: 'Đã tự động điền đầy đủ link và nhấn Enter gửi thành công!' }; } return { ok: false, message: 'Không tìm thấy nút Gửi trên Zalo Web.' }; } catch (err) { return { ok: false, message: 'Lỗi kích hoạt nút Gửi: ' + (err && err.message ? err.message : String(err)) }; } })();";
 
         private async Task<(bool Ok, string Message)> FetchAndBuildSaleMessageAsync(CancellationToken token)
         {
@@ -883,7 +1157,8 @@ namespace ToolAffiliate
             }
 
             var keywords = keywordsBox.Text
-                .Split(new[] { ',', ';', '\n' }, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .Split(new[] { ',', ';', '
+' }, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
                 .ToList();
             if (keywords.Count == 0) keywords.Add("");
 
