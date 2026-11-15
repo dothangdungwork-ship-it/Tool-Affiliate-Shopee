@@ -128,7 +128,6 @@ internal sealed class ZaloShareForm : Form
             BackColor = Color.FromArgb(246, 248, 252)
         };
 
-        // 1. Khung cấu hình API & Thời gian ở trên cùng của phần đáy
         var configGroup = new Panel
         {
             Dock = DockStyle.Top,
@@ -184,7 +183,6 @@ internal sealed class ZaloShareForm : Form
             lblKw, keywordsBox, lblDelay1, minDelayInput, lblDelay2, maxDelayInput, lblDelay3
         });
 
-        // 2. Khung chia đôi: Nội dung tin nhắn (Trái) & Bảng tích chọn danh sách nhóm Zalo (Phải)
         var splitBottom = new SplitContainer
         {
             Dock = DockStyle.Fill,
@@ -207,7 +205,6 @@ internal sealed class ZaloShareForm : Form
         splitBottom.Panel1.Controls.Add(messageBox);
         splitBottom.Panel1.Controls.Add(msgLabel);
 
-        // Panel bên phải cho danh sách nhóm tích chọn (Chỉ hiển thị Nhóm)
         var grpTopPanel = new Panel { Dock = DockStyle.Top, Height = 28 };
         var grpLabel = new Label
         {
@@ -235,7 +232,6 @@ internal sealed class ZaloShareForm : Form
         splitBottom.Panel2.Controls.Add(groupsCheckList);
         splitBottom.Panel2.Controls.Add(grpTopPanel);
 
-        // 3. Thanh nút điều khiển ở dưới cùng
         var actions = new FlowLayoutPanel
         {
             Dock = DockStyle.Bottom,
@@ -446,7 +442,6 @@ internal sealed class ZaloShareForm : Form
         }
     }
 
-    // QUÉT VÀ LỌC CHỈ LẤY NHÓM (BỎ QUA TÀI KHOẢN CÁ NHÂN / BẠN BÈ)
     private async Task LoadGroupsFromZaloAsync()
     {
         if (zaloBrowser.CoreWebView2 is null)
@@ -474,7 +469,6 @@ internal sealed class ZaloShareForm : Form
               const html = el.innerHTML || '';
               const text = el.innerText || '';
               
-              // Điều kiện nhận diện NHÓM Zalo: Có avatar nhóm, icon nhóm hoặc chứa chữ "thành viên"
               const isGroup = html.includes('avatar-group') || 
                               html.includes('ic-avatar-group') || 
                               html.includes('fa-users') || 
@@ -859,379 +853,3 @@ internal sealed class ZaloShareForm : Form
       }
     })();
     """.Replace("__GROUP_NAME__", groupNameJson);
-
-    private static string BuildTypeSearchBoxScript(string groupNameJson) => """
-    (() => {
-      try {
-        const target = __GROUP_NAME__;
-        const searchInput = document.querySelector('#contact-search-input, input[placeholder*="Tìm kiếm"], input[placeholder*="Search"], input[data-id*="txt_Main_Search"]');
-        if (!searchInput) return { ok: false, message: 'Không tìm thấy ô Tìm kiếm trên Zalo Web.' };
-
-        searchInput.focus();
-        searchInput.click();
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-        if (setter) setter.call(searchInput, '');
-        else searchInput.value = '';
-        searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-
-        if (setter) setter.call(searchInput, target);
-        else searchInput.value = target;
-
-        searchInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: target }));
-        searchInput.dispatchEvent(new Event('change', { bubbles: true }));
-        searchInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', bubbles: true }));
-        return { ok: true, message: 'Đã nhập tên nhóm vào ô tìm kiếm.' };
-      } catch (e) {
-        return { ok: false, message: String(e) };
-      }
-    })();
-    """.Replace("__GROUP_NAME__", groupNameJson);
-
-    private static string BuildSelectFirstSearchResultScript() => """
-    (() => {
-      try {
-        const searchInput = document.querySelector('#contact-search-input, input[placeholder*="Tìm kiếm"], input[placeholder*="Search"]');
-        if (searchInput) {
-          searchInput.focus();
-          searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true }));
-          searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-          return { ok: true, message: 'Đã chọn kết quả đầu tiên.' };
-        }
-        return { ok: false, message: 'Không có ô tìm kiếm.' };
-      } catch (e) {
-        return { ok: false, message: String(e) };
-      }
-    })();
-    """;
-
-    private static string BuildFillScript(string messageJson) => """
-    (() => {
-      try {
-        const msg = __MESSAGE__;
-        const visible = e => {
-          if (!e) return false;
-          const r = e.getBoundingClientRect();
-          const s = getComputedStyle(e);
-          return r.width > 20 && r.height > 10 && s.display !== 'none' &&
-            s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled;
-        };
-
-        const zaloSelectors = [
-          '#richInput',
-          '[id^="input_line_"]',
-          '.rich-input',
-          '[data-translate-placeholder*="Nhập @"]',
-          '[data-translate-placeholder*="tin nhắn"]',
-          '[contenteditable="true"]',
-          '[role="textbox"]',
-          'textarea'
-        ];
-
-        let candidates = [];
-        for (const sel of zaloSelectors) {
-          for (const el of document.querySelectorAll(sel)) {
-            if (visible(el) && !candidates.includes(el)) {
-              const idAndClass = ((el.id || '') + ' ' + (el.className || '') + ' ' + (el.getAttribute('placeholder') || '')).toLowerCase();
-              if (/contact-search|search-input|tìm kiếm/.test(idAndClass)) continue;
-              candidates.push(el);
-            }
-          }
-        }
-
-        candidates.sort((a, b) => {
-          const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
-          const aId = (a.id || '').includes('richInput') || (a.id || '').includes('input_line') ? 1000 : 0;
-          const bId = (b.id || '').includes('richInput') || (b.id || '').includes('input_line') ? 1000 : 0;
-          return (bId + br.bottom * 2 + br.width) - (aId + ar.bottom * 2 + ar.width);
-        });
-
-        let editor = candidates[0];
-        if (!editor) {
-          return {
-            ok: false,
-            message: 'Chưa nhận diện được ô nhập tin nhắn. Hãy mở một nhóm trên Zalo Web.'
-          };
-        }
-
-        if (editor.closest('[contenteditable="true"]')) {
-          editor = editor.closest('[contenteditable="true"]');
-        }
-
-        window.__zaloLastEditor = editor;
-        editor.click();
-        editor.focus();
-
-        if (editor.isContentEditable || editor.getAttribute('contenteditable') === 'true') {
-          const selection = window.getSelection();
-          const range = document.createRange();
-          range.selectNodeContents(editor);
-          selection.removeAllRanges();
-          selection.addRange(range);
-          document.execCommand('delete', false, null);
-
-          const lines = msg.split('\n');
-          for (let i = 0; i < lines.length; i++) {
-            if (i > 0) {
-              document.execCommand('insertLineBreak', false, null);
-            }
-            if (lines[i]) {
-              document.execCommand('insertText', false, lines[i]);
-            }
-          }
-
-          if (!(editor.innerText || '').trim()) {
-            editor.innerHTML = '';
-            lines.forEach((line, idx) => {
-              const div = document.createElement('div');
-              div.id = 'input_line_' + idx;
-              if (line) div.textContent = line;
-              else div.appendChild(document.createElement('br'));
-              editor.appendChild(div);
-            });
-          }
-
-          editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: msg }));
-          editor.dispatchEvent(new Event('change', { bubbles: true }));
-        } else {
-          const proto = editor.tagName === 'TEXTAREA'
-            ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-          if (setter) setter.call(editor, msg); else editor.value = msg;
-          editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: msg }));
-          editor.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-
-        return { ok: true, message: 'Đã điền đầy đủ nội dung vào ô chat Zalo.' };
-      } catch (err) {
-        return { ok: false, message: 'Lỗi điền nội dung trên Zalo Web: ' + (err && err.message ? err.message : String(err)) };
-      }
-    })();
-    """.Replace("__MESSAGE__", messageJson);
-
-    private static string BuildTriggerSendScript() => """
-    (() => {
-      try {
-        const visible = e => {
-          if (!e) return false;
-          const r = e.getBoundingClientRect();
-          const s = getComputedStyle(e);
-          return r.width > 10 && r.height > 10 && s.display !== 'none' &&
-            s.visibility !== 'hidden' && Number(s.opacity || 1) > 0 && !e.disabled;
-        };
-
-        const editor = window.__zaloLastEditor || document.querySelector('#richInput, [contenteditable="true"]');
-
-        const sendSelectors = [
-          '[data-translate-title="STR_SEND"]',
-          '[title="Gửi tin nhắn"]',
-          '[title="Send message"]',
-          '.send-msg-btn',
-          '.fa-Sent-msg_24_Line',
-          '[data-id*="btn_Main_Send"]'
-        ];
-
-        let sendBtn = null;
-        for (const sel of sendSelectors) {
-          const found = document.querySelector(sel);
-          if (found && visible(found)) {
-            sendBtn = found.closest('div[role="button"], button, .z--btn--v2, .send-msg-btn') || found;
-            break;
-          }
-        }
-
-        if (!sendBtn) {
-          const allButtons = [...document.querySelectorAll('button, [role="button"], .z--btn--v2, i.fa-Sent-msg_24_Line')].filter(visible);
-          const matched = allButtons.find(b => {
-            const meta = ((b.innerText || '') + ' ' + (b.title || '') + ' ' + (b.className || '') + ' ' + (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-translate-title') || '')).toLowerCase();
-            return /str_send|gửi tin nhắn|send message|sent-msg|send-msg|^gửi$|^send$/i.test(meta.trim());
-          });
-          if (matched) sendBtn = matched.closest('div[role="button"], button, .z--btn--v2') || matched;
-        }
-
-        if (sendBtn) {
-          const rect = sendBtn.getBoundingClientRect();
-          const cx = rect.left + rect.width / 2;
-          const cy = rect.top + rect.height / 2;
-          sendBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-          sendBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-          sendBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-          sendBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
-          sendBtn.click();
-          return { ok: true, message: 'Đã tự động điền đầy đủ link và bấm nút Gửi thành công!' };
-        }
-
-        if (editor) {
-          editor.focus();
-          const enterOpts = {
-            key: 'Enter', code: 'Enter', keyCode: 13, which: 13, charCode: 13,
-            bubbles: true, cancelable: true
-          };
-          editor.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
-          editor.dispatchEvent(new KeyboardEvent('keypress', enterOpts));
-          editor.dispatchEvent(new KeyboardEvent('keyup', enterOpts));
-          return { ok: true, message: 'Đã tự động điền đầy đủ link và nhấn Enter gửi thành công!' };
-        }
-
-        return { ok: false, message: 'Không tìm thấy nút Gửi trên Zalo Web.' };
-      } catch (err) {
-        return { ok: false, message: 'Lỗi kích hoạt nút Gửi: ' + (err && err.message ? err.message : String(err)) };
-      }
-    })();
-    """;
-
-    private async Task<(bool Ok, string Message)> FetchAndBuildSaleMessageAsync(CancellationToken token)
-    {
-        var apiKey = apiKeyBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(apiKey))
-        {
-            return (false, "Hãy nhập API Key Addlivetag ở dòng cấu hình.");
-        }
-
-        var keywords = keywordsBox.Text
-            .Split(new[] { ',', ';', '\n' }, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .ToList();
-        if (keywords.Count == 0) keywords.Add("");
-
-        var currentKeyword = keywords[keywordRotateIndex % keywords.Count];
-        keywordRotateIndex++;
-
-        int needed = (int)batchCountInput.Value;
-        var deals = await QueryAddlivetagDealsAsync(apiKey, currentKeyword, needed * 3, token);
-        if (deals.Count == 0 && !string.IsNullOrEmpty(currentKeyword))
-        {
-            deals = await QueryAddlivetagDealsAsync(apiKey, "", needed * 3, token);
-        }
-
-        if (deals.Count == 0)
-        {
-            return (false, "Không lấy được sản phẩm từ Addlivetag API. Sẽ dùng nội dung tin nhắn hiện tại.");
-        }
-
-        var selectedDeals = deals
-            .Where(d => !string.IsNullOrWhiteSpace(d.ProductUrl) && (string.IsNullOrEmpty(d.ItemId) || !sentItemIds.Contains(d.ItemId)))
-            .Take(needed)
-            .ToList();
-
-        if (selectedDeals.Count == 0)
-        {
-            sentItemIds.Clear();
-            selectedDeals = deals.Where(d => !string.IsNullOrWhiteSpace(d.ProductUrl)).Take(needed).ToList();
-        }
-
-        foreach (var d in selectedDeals)
-        {
-            if (!string.IsNullOrEmpty(d.ItemId)) sentItemIds.Add(d.ItemId);
-        }
-
-        await PopulateAffiliateLinksAsync(apiKey, selectedDeals, token);
-
-        var lines = new List<string>
-        {
-            string.IsNullOrWhiteSpace(currentKeyword)
-                ? "🔥 TỔNG HỢP DEAL SALE SHOPEE ĐANG GIẢM SÂU:"
-                : $"🔥 SĂN DEAL SALE SHOPEE ({currentKeyword.ToUpperInvariant()}):"
-        };
-
-        foreach (var deal in selectedDeals)
-        {
-            lines.Add("");
-            var pricePart = !string.IsNullOrWhiteSpace(deal.PriceText) ? $" — 💰 Giá chỉ: {deal.PriceText}" : "";
-            lines.Add($"• {deal.Name}{pricePart}");
-            lines.Add($"👉 Mua ngay: {(string.IsNullOrWhiteSpace(deal.AffiliateUrl) ? deal.ProductUrl : deal.AffiliateUrl)}");
-        }
-
-        lines.Add("");
-        lines.Add("⚡ Vào link áp thêm mã giảm giá trên Shopee trước khi hết lượt nhé!");
-
-        messageBox.Text = string.Join(Environment.NewLine, lines);
-        return (true, $"Đã tự động lấy {selectedDeals.Count} sản phẩm sale & tạo link Affiliate!");
-    }
-
-    private async Task<List<SaleDealItem>> QueryAddlivetagDealsAsync(string apiKey, string keyword, int limit, CancellationToken token)
-    {
-        var results = new List<SaleDealItem>();
-        var encodedKw = Uri.EscapeDataString(keyword ?? "");
-        var encodedKey = Uri.EscapeDataString(apiKey);
-
-        var candidateUrls = new[]
-        {
-            $"https://data.addlivetag.com/offers/product-offer.php?keyword={encodedKw}&page=1&limit={limit}&key={encodedKey}",
-            $"https://data.addlivetag.com/search/market.php?q={encodedKw}&page=1&limit={limit}&key={encodedKey}",
-            $"https://data.addlivetag.com/offers/shopee-offer.php?page=1&limit={limit}&key={encodedKey}"
-        };
-
-        foreach (var endpoint in candidateUrls)
-        {
-            try
-            {
-                using var req = new HttpRequestMessage(HttpMethod.Get, endpoint);
-                req.Headers.Add("X-API-Key", apiKey);
-                req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
-                using var resp = await http.SendAsync(req, token);
-                if (!resp.IsSuccessStatusCode) continue;
-
-                var json = await resp.Content.ReadAsStringAsync(token);
-                using var doc = JsonDocument.Parse(json);
-                ExtractDealsFromJson(doc.RootElement, results);
-
-                if (results.Count > 0) break;
-            }
-            catch { }
-        }
-
-        return results;
-    }
-
-    private static void ExtractDealsFromJson(JsonElement root, List<SaleDealItem> collector)
-    {
-        if (root.ValueKind == JsonValueKind.Object)
-        {
-            string name = GetFirstString(root, "productName", "item_name", "name", "title", "offerName");
-            string link = GetFirstString(root, "productLink", "originalLink", "item_url", "url", "offerLink", "link");
-            string itemId = GetFirstString(root, "itemId", "item_id", "id");
-            string shopId = GetFirstString(root, "shopId", "shop_id");
-
-            if (string.IsNullOrWhiteSpace(link) && !string.IsNullOrWhiteSpace(shopId) && !string.IsNullOrWhiteSpace(itemId))
-            {
-                link = $"https://shopee.vn/product/{shopId}/{itemId}";
-            }
-
-            if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(link) && link.Contains("shopee", StringComparison.OrdinalIgnoreCase))
-            {
-                string price = FormatVndPrice(GetFirstString(root, "price", "salePrice", "priceMin", "discountPrice"));
-                string comm = FormatVndPrice(GetFirstString(root, "commission", "sellerComFinal", "shopeeComFinal"));
-                string existingAff = GetFirstString(root, "affLink", "short_link", "shortLink", "offerLink");
-
-                collector.Add(new SaleDealItem
-                {
-                    ItemId = itemId,
-                    Name = name,
-                    PriceText = price,
-                    CommissionText = comm,
-                    ProductUrl = CleanShopeeProductUrl(link),
-                    AffiliateUrl = existingAff.StartsWith("https://s.shopee.vn", StringComparison.OrdinalIgnoreCase) ? existingAff : ""
-                });
-                return;
-            }
-
-            foreach (var prop in root.EnumerateObject())
-            {
-                if (prop.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object)
-                {
-                    ExtractDealsFromJson(prop.Value, collector);
-                }
-            }
-        }
-        else if (root.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in root.EnumerateArray())
-            {
-                ExtractDealsFromJson(item, collector);
-            }
-        }
-    }
-
-    private async Task PopulateAffiliateLinksAsync(string apiKey, List<SaleDealItem> deals, CancellationToken token)
-    {
-        var affId = affIdBox.Text.Trim();
