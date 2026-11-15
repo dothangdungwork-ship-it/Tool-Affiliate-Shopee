@@ -112,7 +112,7 @@ internal sealed class ZaloShareForm : Form
 
     public ZaloShareForm(string message)
     {
-        Text = "Tool Affiliate - Gửi Tin Nhắn Zalo Tự Động (Chọn Nhóm Bằng Tích Chọn)";
+        Text = "Tool Affiliate - Gửi Tin Nhắn Zalo Tự Động (Chỉ Lọc Nhóm)";
         Width = 1280;
         Height = 900;
         MinimumSize = new Size(1020, 720);
@@ -207,13 +207,13 @@ internal sealed class ZaloShareForm : Form
         splitBottom.Panel1.Controls.Add(messageBox);
         splitBottom.Panel1.Controls.Add(msgLabel);
 
-        // Panel bên phải cho danh sách nhóm tích chọn
+        // Panel bên phải cho danh sách nhóm tích chọn (Chỉ hiển thị Nhóm)
         var grpTopPanel = new Panel { Dock = DockStyle.Top, Height = 28 };
         var grpLabel = new Label
         {
-            Text = "Tích chọn nhóm Zalo cần gửi:",
+            Text = "Tích chọn NHÓM Zalo cần gửi:",
             Dock = DockStyle.Left,
-            Width = 185,
+            Width = 195,
             Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
             Padding = new Padding(0, 5, 0, 0)
         };
@@ -221,7 +221,7 @@ internal sealed class ZaloShareForm : Form
         {
             Text = "🔄 Tải danh sách nhóm từ Zalo",
             Dock = DockStyle.Right,
-            Width = 195,
+            Width = 205,
             Height = 26,
             BackColor = Color.FromArgb(230, 242, 255)
         };
@@ -446,6 +446,7 @@ internal sealed class ZaloShareForm : Form
         }
     }
 
+    // QUÉT VÀ LỌC CHỈ LẤY NHÓM (BỎ QUA TÀI KHOẢN CÁ NHÂN / BẠN BÈ)
     private async Task LoadGroupsFromZaloAsync()
     {
         if (zaloBrowser.CoreWebView2 is null)
@@ -454,7 +455,7 @@ internal sealed class ZaloShareForm : Form
             return;
         }
 
-        statusLabel.Text = "Đang quét danh sách nhóm/trò chuyện từ Zalo Web...";
+        statusLabel.Text = "Đang quét và lọc danh sách NHÓM từ Zalo Web...";
         const string script = """
         (() => {
           try {
@@ -469,7 +470,20 @@ internal sealed class ZaloShareForm : Form
             const names = [];
             for (const el of items) {
               if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) continue;
-              const rawText = (el.innerText || '').split('\n')[0].replace(/\s+/g, ' ').trim();
+              
+              const html = el.innerHTML || '';
+              const text = el.innerText || '';
+              
+              // Điều kiện nhận diện NHÓM Zalo: Có avatar nhóm, icon nhóm hoặc chứa chữ "thành viên"
+              const isGroup = html.includes('avatar-group') || 
+                              html.includes('ic-avatar-group') || 
+                              html.includes('fa-users') || 
+                              text.includes('thành viên') ||
+                              el.querySelector('svg[class*="group"], .ic-avatar-group, .avatar-group') !== null;
+
+              if (!isGroup) continue;
+
+              const rawText = text.split('\n')[0].replace(/\s+/g, ' ').trim();
               if (rawText && rawText.length < 100 && !names.includes(rawText)) {
                 names.push(rawText);
               }
@@ -507,12 +521,12 @@ internal sealed class ZaloShareForm : Form
                             groupsCheckList.Items.Add(name, shouldCheck);
                         }
 
-                        statusLabel.Text = $"Đã tải thành công {fetchedList.Count} nhóm/trò chuyện từ Zalo!";
+                        statusLabel.Text = $"Đã lọc và tải thành công {fetchedList.Count} NHÓM từ Zalo!";
                         return;
                     }
                 }
             }
-            statusLabel.Text = "Không quét được nhóm. Hãy chắc chắn bạn đã đăng nhập Zalo Web.";
+            statusLabel.Text = "Không tìm thấy nhóm nào. Hãy chắc chắn bạn đã đăng nhập Zalo Web.";
         }
         catch (Exception ex)
         {
@@ -559,7 +573,6 @@ internal sealed class ZaloShareForm : Form
             {
                 batchNumber++;
 
-                // 1. Tự động lấy sản phẩm sale mới từ Addlivetag nếu có API Key
                 if (!string.IsNullOrWhiteSpace(apiKeyBox.Text))
                 {
                     statusLabel.Text = $"[Đợt #{batchNumber}] Đang lấy sản phẩm sale từ Addlivetag API...";
@@ -574,7 +587,6 @@ internal sealed class ZaloShareForm : Form
                     break;
                 }
 
-                // 2. Lấy danh sách các nhóm đã tích chọn. Nếu chưa tích nhóm nào -> Gửi thẳng vào nhóm đang mở trên Zalo Web.
                 var groups = GetTargetGroups();
                 int minSec = (int)Math.Min(minDelayInput.Value, maxDelayInput.Value);
                 int maxSec = (int)Math.Max(minDelayInput.Value, maxDelayInput.Value);
@@ -1067,9 +1079,6 @@ internal sealed class ZaloShareForm : Form
     })();
     """;
 
-    // =========================================================================
-    // KẾT NỐI API ADDLIVETAG LẤY SẢN PHẨM SALE & TẠO LINK AFFILIATE
-    // =========================================================================
     private async Task<(bool Ok, string Message)> FetchAndBuildSaleMessageAsync(CancellationToken token)
     {
         var apiKey = apiKeyBox.Text.Trim();
@@ -1226,108 +1235,3 @@ internal sealed class ZaloShareForm : Form
     private async Task PopulateAffiliateLinksAsync(string apiKey, List<SaleDealItem> deals, CancellationToken token)
     {
         var affId = affIdBox.Text.Trim();
-        var sub1 = CleanSubId(subIdBox.Text.Trim());
-        if (string.IsNullOrEmpty(sub1)) sub1 = "zalo";
-
-        for (int i = 0; i < deals.Count; i += 5)
-        {
-            var chunk = deals.Skip(i).Take(5).ToList();
-            try
-            {
-                var payloadObj = new Dictionary<string, object>
-                {
-                    ["urls"] = chunk.Select(x => x.ProductUrl).ToArray(),
-                    ["sub1"] = sub1
-                };
-                if (!string.IsNullOrWhiteSpace(affId)) payloadObj["aff_id"] = affId;
-
-                using var req = new HttpRequestMessage(HttpMethod.Post, "https://addlivetag.com/api/v1/shopee-link.php");
-                req.Headers.Add("X-API-Key", apiKey);
-                req.Content = new StringContent(JsonSerializer.Serialize(payloadObj), Encoding.UTF8, "application/json");
-
-                using var resp = await http.SendAsync(req, token);
-                if (resp.IsSuccessStatusCode)
-                {
-                    var raw = await resp.Content.ReadAsStringAsync(token);
-                    using var doc = JsonDocument.Parse(raw);
-                    var root = doc.RootElement;
-                    if (root.TryGetProperty("ok", out var okProp) && okProp.GetBoolean() &&
-                        root.TryGetProperty("data", out var dataArr) && dataArr.ValueKind == JsonValueKind.Array)
-                    {
-                        int idx = 0;
-                        foreach (var el in dataArr.EnumerateArray())
-                        {
-                            if (idx < chunk.Count && el.TryGetProperty("ok", out var itemOk) && itemOk.GetBoolean())
-                            {
-                                var shortLink = GetFirstString(el, "short_link", "shortLink");
-                                if (!string.IsNullOrWhiteSpace(shortLink))
-                                    chunk[idx].AffiliateUrl = shortLink;
-                            }
-                            idx++;
-                        }
-                    }
-                }
-            }
-            catch { }
-        }
-
-        foreach (var deal in deals)
-        {
-            if (string.IsNullOrWhiteSpace(deal.AffiliateUrl))
-            {
-                if (!string.IsNullOrWhiteSpace(affId))
-                {
-                    var cleanOrigin = CleanShopeeProductUrl(deal.ProductUrl);
-                    deal.AffiliateUrl = $"https://s.shopee.vn/an_redir?origin_link={Uri.EscapeDataString(cleanOrigin)}&affiliate_id={Uri.EscapeDataString(affId)}&sub_id={sub1}-autodeal";
-                }
-                else
-                {
-                    deal.AffiliateUrl = deal.ProductUrl;
-                }
-            }
-        }
-    }
-
-    private static string CleanShopeeProductUrl(string url)
-    {
-        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
-        {
-            return $"{uri.Scheme}://{uri.Host}{uri.AbsolutePath}";
-        }
-        return url;
-    }
-
-    private static string CleanSubId(string raw)
-    {
-        var sb = new StringBuilder();
-        foreach (char c in raw)
-        {
-            if (char.IsLetterOrDigit(c)) sb.Append(c);
-        }
-        return sb.ToString();
-    }
-
-    private static string GetFirstString(JsonElement obj, params string[] keys)
-    {
-        foreach (var k in keys)
-        {
-            if (obj.TryGetProperty(k, out var val))
-            {
-                if (val.ValueKind == JsonValueKind.String) return val.GetString() ?? "";
-                if (val.ValueKind == JsonValueKind.Number) return val.GetRawText();
-            }
-        }
-        return "";
-    }
-
-    private static string FormatVndPrice(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return "";
-        if (decimal.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var num))
-        {
-            if (num > 100000000) num /= 100000;
-            return string.Format(System.Globalization.CultureInfo.GetCultureInfo("vi-VN"), "{0:N0}đ", num);
-        }
-        return raw;
-    }
-}
